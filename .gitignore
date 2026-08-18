@@ -1,0 +1,9 @@
+**/utils/request.js
+# Auto-added essential ignore rules
+*.log
+target/
+/bugs
+
+# 前端构建产物与依赖(部署时 npm install + npm run release 重新生成)
+dist/
+node_modules/
