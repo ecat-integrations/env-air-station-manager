@@ -71,12 +71,6 @@
       <version>3.1.0</version>
       <scope>provided</scope>
     </dependency>
-    <dependency>
-      <groupId>com.ecat</groupId>
-      <artifactId>integration-logicdevice-airdevice</artifactId>
-      <version>3.1.0</version>
-      <scope>provided</scope>
-    </dependency>
   </dependencies>
   <build>
     <resources>
