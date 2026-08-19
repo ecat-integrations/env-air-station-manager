@@ -12,4 +12,5 @@ dependencies:
     groupId: com.ecat
     version: ^3.0.0
 web-platform:
+  ui: true
   api: true

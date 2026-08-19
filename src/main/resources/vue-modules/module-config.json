@@ -1,0 +1,101 @@
+{
+  "public_path": "/ecat-integrations/integration-env-air-station-manager/",
+  "module_path": "/ecat-integrations/integration-env-air-station-manager/",
+  "module_name": "integration-env-air-station-manager",
+  "sub_modules": [
+    {
+      "module": "air-station-manager",
+      "mtype": "web",
+      "module_routes": [
+        {
+          "name": "index",
+          "path": "index",
+          "hidden": false,
+          "redirect": "noRedirect",
+          "component": "Layout",
+          "alwaysShow": true,
+          "meta": {
+            "title": "空气站房管理",
+            "icon": "redis-list",
+            "noCache": false,
+            "link": null
+          },
+          "children": [
+            {
+              "name": "monitor",
+              "path": "monitor",
+              "hidden": false,
+              "component": "views/AsmMonitorHome",
+              "meta": {
+                "title": "站房设备总览",
+                "icon": "monitor",
+                "noCache": false,
+                "link": null
+              }
+            },
+            {
+              "name": "history_data",
+              "path": "history_data",
+              "hidden": false,
+              "component": "views/AsmHistoryData",
+              "meta": {
+                "title": "历史数据",
+                "icon": "chart",
+                "noCache": false,
+                "link": null
+              }
+            },
+            {
+              "name": "alarm_rule",
+              "path": "alarm_rule",
+              "hidden": false,
+              "component": "views/AsmAlarmRule",
+              "meta": {
+                "title": "报警规则",
+                "icon": "build",
+                "noCache": false,
+                "link": null
+              }
+            },
+            {
+              "name": "alarm_list",
+              "path": "alarm_list",
+              "hidden": false,
+              "component": "views/AsmAlarmList",
+              "meta": {
+                "title": "报警记录",
+                "icon": "message",
+                "noCache": false,
+                "link": null
+              }
+            },
+            {
+              "name": "control_list",
+              "path": "control_list",
+              "hidden": false,
+              "component": "views/AsmControlList",
+              "meta": {
+                "title": "控制记录",
+                "icon": "log",
+                "noCache": false,
+                "link": null
+              }
+            },
+            {
+              "name": "config",
+              "path": "config",
+              "hidden": false,
+              "component": "views/AsmConfigView",
+              "meta": {
+                "title": "聚合单位配置",
+                "icon": "edit",
+                "noCache": false,
+                "link": null
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

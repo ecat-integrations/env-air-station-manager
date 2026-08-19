@@ -1,0 +1,5 @@
+# npm run gen 自动生成，勿手改、不入库（克隆后 npm run gen 再生）
+air-station-manager/.config.js
+air-station-manager/.index.js
+# 依赖锁定文件不入库（同 ADM 惯例）
+package-lock.json

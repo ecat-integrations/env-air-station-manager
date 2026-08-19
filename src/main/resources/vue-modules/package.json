@@ -1,0 +1,29 @@
+{
+  "name": "integration-env-air-station-manager",
+  "version": "3.1.0",
+  "description": "空气站房管理（站房动环监控/历史/报警/控制）",
+  "author": "ECAT Open Source Community",
+  "license": "MIT",
+  "scripts": {
+    "gen": "node ../../../../../env-dev-utils/vue-package/build-ruoyi/build.js ./",
+    "dev": "npm run gen && webpack --config webpack.config.js --mode=development",
+    "release": "npm run gen && webpack --config webpack.config.js --mode=production"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.26.10",
+    "@babel/preset-env": "^7.26.9",
+    "autoprefixer": "^10.5.4",
+    "babel-loader": "^10.0.0",
+    "css-loader": "^7.1.2",
+    "postcss": "^8.5.26",
+    "postcss-loader": "^8.2.1",
+    "sass": "^1.102.0",
+    "sass-loader": "^16.0.8",
+    "style-loader": "^4.0.0",
+    "unplugin-auto-import": "0.17.6",
+    "vue": "^3.4.31",
+    "vue-loader": "^17.4.2",
+    "webpack": "^5.99.6",
+    "webpack-cli": "^6.0.1"
+  }
+}
