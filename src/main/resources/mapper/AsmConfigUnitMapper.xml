@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.ecat.integration.EnvAirStationManagerIntegration.mapper.AsmConfigUnitMapper">
+
+    <!-- 每 series 单位偏好窄行；created_at/updated_at timestamptz 走 TimestamptzInstantTypeHandler；FQCN 同因。 -->
+    <resultMap type="com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmConfigUnit" id="AsmConfigUnitResult">
+        <result property="logicDeviceUniqueId" column="logic_device_unique_id"/>
+        <result property="attrId"              column="attr_id"/>
+        <result property="purpose"             column="purpose"/>
+        <result property="unit"                column="unit"/>
+        <result property="createdBy"           column="created_by"/>
+        <result property="updatedBy"           column="updated_by"/>
+        <result property="createdAt"           column="created_at" typeHandler="com.ecat.integration.EnvAirStationManagerIntegration.support.TimestamptzInstantTypeHandler"/>
+        <result property="updatedAt"           column="updated_at" typeHandler="com.ecat.integration.EnvAirStationManagerIntegration.support.TimestamptzInstantTypeHandler"/>
+    </resultMap>
+
+    <sql id="cols">
+        logic_device_unique_id, attr_id, purpose, unit, created_by, updated_by, created_at, updated_at
+    </sql>
+
+    <select id="selectByLogicDevice" resultMap="AsmConfigUnitResult">
+        select <include refid="cols"/> from asm_config_unit
+        where logic_device_unique_id = #{logicDeviceUniqueId}
+        order by attr_id, purpose
+    </select>
+
+    <select id="selectByPurpose" resultMap="AsmConfigUnitResult">
+        select <include refid="cols"/> from asm_config_unit
+        where purpose = #{purpose}
+        order by logic_device_unique_id, attr_id
+    </select>
+
+    <!-- upsert：on conflict(uid, attr, purpose) do update 只覆盖 unit + 审计列（单位偏好是完整语义）。 -->
+    <insert id="upsert" parameterType="com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmConfigUnit">
+        insert into asm_config_unit
+            (logic_device_unique_id, attr_id, purpose, unit, created_by, updated_by, created_at, updated_at)
+        values
+            (#{logicDeviceUniqueId}, #{attrId}, #{purpose}, #{unit}, #{createdBy}, #{updatedBy}, now(), now())
+        on conflict (logic_device_unique_id, attr_id, purpose) do update set
+            unit       = excluded.unit,
+            updated_by = excluded.updated_by,
+            updated_at = now()
+    </insert>
+
+    <!-- insertIfAbsent：on conflict do nothing——已存在行（人工精化 unit）原样保留；seed 专用。 -->
+    <insert id="insertIfAbsent" parameterType="com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmConfigUnit">
+        insert into asm_config_unit
+            (logic_device_unique_id, attr_id, purpose, unit, created_by, updated_by, created_at, updated_at)
+        values
+            (#{logicDeviceUniqueId}, #{attrId}, #{purpose}, #{unit}, #{createdBy}, #{updatedBy}, now(), now())
+        on conflict (logic_device_unique_id, attr_id, purpose) do nothing
+    </insert>
+</mapper>

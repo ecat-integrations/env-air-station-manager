@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.ecat.integration.EnvAirStationManagerIntegration.mapper.AsmStatComputeLogMapper">
+
+    <!-- 计算执行审计（insert-only）；4 个时间列全 timestamptz 走 TimestamptzInstantTypeHandler；
+         id bigserial 回填（useGeneratedKeys）；created_at 走 DB default。FQCN：非 BaseEntity 实体。 -->
+    <insert id="insert" parameterType="com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmStatComputeLog"
+            useGeneratedKeys="true" keyProperty="id">
+        insert into asm_stat_compute_log
+            (granularity, trigger_source, window_start, window_end, interval_mode,
+             bucket_count, started_at, ended_at, status, error)
+        values
+            (#{granularity}, #{triggerSource},
+             #{windowStart, typeHandler=com.ecat.integration.EnvAirStationManagerIntegration.support.TimestamptzInstantTypeHandler},
+             #{windowEnd, typeHandler=com.ecat.integration.EnvAirStationManagerIntegration.support.TimestamptzInstantTypeHandler},
+             #{intervalMode}, #{bucketCount},
+             #{startedAt, typeHandler=com.ecat.integration.EnvAirStationManagerIntegration.support.TimestamptzInstantTypeHandler},
+             #{endedAt, typeHandler=com.ecat.integration.EnvAirStationManagerIntegration.support.TimestamptzInstantTypeHandler},
+             #{status}, #{error})
+    </insert>
+</mapper>

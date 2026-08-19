@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.ecat.integration.EnvAirStationManagerIntegration.mapper.AsmControlRecordMapper">
+
+    <!-- 控制审计写路径：origin/result 枚举经 MyBatis 默认 EnumTypeHandler 按 name 存取；parameterType FQCN（非 BaseEntity 短别名不注册）；读路径 selectList/countList 供控制记录列表页。 -->
+
+    <resultMap type="com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmControlRecord" id="AsmControlRecordResult">
+        <id property="id" column="id"/>
+        <result property="origin"               column="origin"/>
+        <result property="caller"               column="caller"/>
+        <result property="logicDeviceUniqueId"  column="logic_device_unique_id"/>
+        <result property="attrId"               column="attr_id"/>
+        <result property="action"               column="action"/>
+        <result property="beforeValue"          column="before_value"/>
+        <result property="requestedValue"       column="requested_value"/>
+        <result property="afterValue"           column="after_value"/>
+        <result property="result"               column="result"/>
+        <result property="error"                column="error"/>
+        <result property="durationMs"           column="duration_ms"/>
+        <result property="createdAt"            column="created_at" typeHandler="com.ecat.integration.EnvAirStationManagerIntegration.support.TimestamptzInstantTypeHandler"/>
+    </resultMap>
+
+    <sql id="listWhere">
+        where created_at &gt;= #{start}
+          and created_at &lt; #{end}
+        <if test="logicDeviceUniqueId != null">
+          and logic_device_unique_id = #{logicDeviceUniqueId}
+        </if>
+        <if test="origin != null">
+          and origin = #{origin}
+        </if>
+        <if test="result != null">
+          and result = #{result}
+        </if>
+    </sql>
+
+    <!-- 列表读：全列（含终态回填列），created_at 降序最新在前；limit 由调用方按分页钳制 -->
+    <select id="selectList" resultMap="AsmControlRecordResult">
+        select id, origin, caller, logic_device_unique_id, attr_id, action,
+               before_value, requested_value, after_value, result, error, duration_ms, created_at
+        from asm_control_record
+        <include refid="listWhere"/>
+        order by created_at desc
+        limit #{limit}
+    </select>
+
+    <select id="countList" resultType="long">
+        select count(*)
+        from asm_control_record
+        <include refid="listWhere"/>
+    </select>
+
+    <!-- 先落 PENDING：after_value/error/duration_ms 执行后才可知，不在 insert 列 -->
+    <insert id="insert" parameterType="com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmControlRecord"
+            useGeneratedKeys="true" keyProperty="id">
+        insert into asm_control_record
+            (origin, caller, logic_device_unique_id, attr_id, action,
+             before_value, requested_value, result, created_at)
+        values
+            (#{origin}, #{caller}, #{logicDeviceUniqueId}, #{attrId}, #{action},
+             #{beforeValue}, #{requestedValue}, #{result}, now())
+    </insert>
+
+    <!-- 执行终态回填：只补 result/after_value/error/duration_ms（审计契约：PENDING 先落、终态后补） -->
+    <update id="updateResult" parameterType="com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmControlRecord">
+        update asm_control_record
+        set result      = #{result},
+            after_value = #{afterValue},
+            error       = #{error},
+            duration_ms = #{durationMs}
+        where id = #{id}
+    </update>
+</mapper>

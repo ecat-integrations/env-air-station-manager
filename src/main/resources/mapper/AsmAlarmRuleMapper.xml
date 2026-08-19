@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.ecat.integration.EnvAirStationManagerIntegration.mapper.AsmAlarmRuleMapper">
+
+    <!-- 报警规则行；created_at/updated_at timestamptz 走 TimestamptzInstantTypeHandler；type FQCN（非 BaseEntity 短别名不注册）。 -->
+    <resultMap type="com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmAlarmRule" id="AsmAlarmRuleResult">
+        <id property="id" column="id"/>
+        <result property="alarmType"     column="alarm_type"/>
+        <result property="severity"      column="severity"/>
+        <result property="settingContent" column="setting_content"/>
+        <result property="sort"          column="sort"/>
+        <result property="createdAt"     column="created_at" typeHandler="com.ecat.integration.EnvAirStationManagerIntegration.support.TimestamptzInstantTypeHandler"/>
+        <result property="updatedAt"     column="updated_at" typeHandler="com.ecat.integration.EnvAirStationManagerIntegration.support.TimestamptzInstantTypeHandler"/>
+    </resultMap>
+
+    <select id="selectAll" resultMap="AsmAlarmRuleResult">
+        select id, alarm_type, severity, setting_content, sort, created_at, updated_at
+        from asm_alarm_rule
+        order by sort nulls last, id
+    </select>
+
+    <select id="selectById" resultMap="AsmAlarmRuleResult">
+        select id, alarm_type, severity, setting_content, sort, created_at, updated_at
+        from asm_alarm_rule
+        where id = #{id}
+    </select>
+
+    <insert id="insert" parameterType="com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmAlarmRule"
+            useGeneratedKeys="true" keyProperty="id">
+        insert into asm_alarm_rule (alarm_type, severity, setting_content, sort, created_at, updated_at)
+        values (#{alarmType}, #{severity}, #{settingContent}, #{sort}, now(), now())
+    </insert>
+
+    <update id="update" parameterType="com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmAlarmRule">
+        update asm_alarm_rule set
+            alarm_type      = #{alarmType},
+            severity        = #{severity},
+            setting_content = #{settingContent},
+            sort            = #{sort},
+            updated_at      = now()
+        where id = #{id}
+    </update>
+
+    <delete id="deleteById">
+        delete from asm_alarm_rule where id = #{id}
+    </delete>
+</mapper>

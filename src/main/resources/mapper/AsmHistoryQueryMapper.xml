@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.ecat.integration.EnvAirStationManagerIntegration.mapper.AsmHistoryQueryMapper">
+
+    <!--
+        stat 桶行读模型 resultMap。data_time timestamptz 走 TimestamptzInstantTypeHandler（结果侧显式
+        TypeHandler，PG JDBC 42.x 拒隐式转换；参数侧 Instant 直绑 setObject）。
+        type 用 FQCN：AsmHistoryBucket 是 controller.dto 读模型非 BaseEntity，DynamicJarLoader 不注册
+        其短别名（ADM 教训，短名抛 ClassNotFoundException 级联瘫痪 mapper 装配）。
+    -->
+    <resultMap type="com.ecat.integration.EnvAirStationManagerIntegration.controller.dto.AsmHistoryBucket" id="AsmHistoryBucketResult">
+        <result property="dataTime"           column="data_time" typeHandler="com.ecat.integration.EnvAirStationManagerIntegration.support.TimestamptzInstantTypeHandler"/>
+        <result property="logicDeviceUniqueId" column="logic_device_unique_id"/>
+        <result property="attrId"             column="attr_id"/>
+        <result property="avgValue"           column="avg_value"/>
+        <result property="validCount"         column="valid_count"/>
+        <result property="totalCount"         column="total_count"/>
+    </resultMap>
+
+    <!--
+        单条 tuple IN-list batch 查询（ONE round-trip 取全参数，禁逐参数 N+1）。
+        ${table} = service 按 AsmStatGranularity.targetTable() 映射的固定白名单表名（asm_stat_minute/_5min/_hour），
+        非用户输入，${} 原样拼入无注入面。
+        interval_mode = #{modeCode} 是防串台唯一闸：PK 含 interval_mode，多 mode 并存下同 data_time
+        BACK/FRONT 各自独立一行，不过滤会串台（ADM 教训平移）。
+        窗口 [start,end) 前闭后开（历史页与 SDK 同口径）；ORDER BY data_time ASC 旧→新时间序列。
+        LIMIT/OFFSET 分页：limit<=0 时不限（SDK 全窗路径，窗口上限由 service 校验卡死无深 OFFSET）。
+    -->
+    <select id="selectStatRows" resultMap="AsmHistoryBucketResult">
+        SELECT data_time,
+               logic_device_unique_id,
+               attr_id,
+               avg_value,
+               valid_count,
+               total_count
+        FROM ${table}
+        WHERE data_time &gt;= #{start}
+          AND data_time &lt; #{end}
+          AND interval_mode = #{modeCode}
+          AND (logic_device_unique_id, attr_id) IN
+          <foreach collection="seriesList" item="s" open="(" separator="," close=")">
+            (#{s.logicDeviceUniqueId}, #{s.attrId})
+          </foreach>
+        ORDER BY data_time ASC, logic_device_unique_id, attr_id
+        <if test="limit &gt; 0">
+            LIMIT #{limit} OFFSET #{offset}
+        </if>
+    </select>
+
+    <!--
+        SDK 动态参数清单（listStatParams 读出口）。ASM 粒度掩码真相源在 asm_config_stat（非 config_unit 列，
+        与 ADM 不同），存储单位在 asm_config_unit STORAGE 行——双表 JOIN 两真相源一次取齐。
+        LEFT JOIN：STORAGE 行缺失（seed 未跑/仅配 stat）仍列出参数，unit=null=无量纲语义。
+        purpose 字面量 'STORAGE' 与 AsmUnitPurpose.STORAGE.name() 同源（枚举名编译期闭合）。
+    -->
+    <resultMap type="com.ecat.integration.EnvAirStationManagerIntegration.controller.dto.AsmStatParamMetaRow" id="AsmStatParamMetaRowResult">
+        <result property="logicDeviceUniqueId" column="logic_device_unique_id"/>
+        <result property="attrId"              column="attr_id"/>
+        <result property="unit"                column="unit"/>
+        <result property="granularityMask"     column="granularity_mask"/>
+    </resultMap>
+
+    <select id="selectStatParamMetas" resultMap="AsmStatParamMetaRowResult">
+        SELECT s.logic_device_unique_id,
+               s.attr_id,
+               u.unit,
+               s.granularity_mask
+        FROM asm_config_stat s
+        LEFT JOIN asm_config_unit u
+          ON u.logic_device_unique_id = s.logic_device_unique_id
+         AND u.attr_id = s.attr_id
+         AND u.purpose = 'STORAGE'
+        ORDER BY s.logic_device_unique_id, s.attr_id
+    </select>
+
+    <!--
+        raw 最新值（snapshot 回放源）：DISTINCT ON 每 (uid, attrId) 取 data_time 最大一行，单 SQL
+        禁 per-series N+1。data_time timestamptz 走 TimestamptzInstantTypeHandler（复用 AsmDataSampleResult
+        列集）。uids foreach IN 展开（snapshot 按设备清单批量取）。
+    -->
+    <select id="selectLatestSamples" resultMap="com.ecat.integration.EnvAirStationManagerIntegration.mapper.AsmDataSampleMapper.AsmDataSampleResult">
+        SELECT DISTINCT ON (logic_device_unique_id, attr_id)
+               logic_device_unique_id, attr_id, data_time, value_num, value_text, unit, source
+        FROM asm_data_sample
+        WHERE logic_device_unique_id IN
+        <foreach collection="uids" item="uid" open="(" separator="," close=")">
+            #{uid}
+        </foreach>
+        ORDER BY logic_device_unique_id, attr_id, data_time DESC
+    </select>
+</mapper>

@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.ecat.integration.EnvAirStationManagerIntegration.mapper.AsmStatMapper">
+
+    <!--
+        三级 stat upsert（asm_stat_minute / asm_stat_5min / asm_stat_hour 同构，每粒度一个 statement，
+        表名静态写死非 ${} 插值）。ON CONFLICT 4 列 PK（data_time, logic_device_unique_id, attr_id, interval_mode）
+        DO UPDATE 全量覆盖 avg/valid/total + 刷 updated_at=now()——重算/回补幂等，多 mode 并存下同桶
+        BACK/FRONT 各自独立一行互不干扰。批量 foreach 多行 VALUES（物化微批入参）。
+        data_time 落库经 TimestamptzInstantTypeHandler（timestamptz 列，OffsetDateTime 中转）。
+    -->
+    <insert id="upsertMinute" parameterType="java.util.List">
+        insert into asm_stat_minute
+            (data_time, logic_device_unique_id, attr_id, interval_mode, avg_value, valid_count, total_count, updated_at)
+        values
+        <foreach collection="list" item="item" separator=",">
+            (#{item.dataTime, typeHandler=com.ecat.integration.EnvAirStationManagerIntegration.support.TimestamptzInstantTypeHandler},
+             #{item.logicDeviceUniqueId}, #{item.attrId}, #{item.intervalMode},
+             #{item.avgValue}, #{item.validCount}, #{item.totalCount}, now())
+        </foreach>
+        on conflict (data_time, logic_device_unique_id, attr_id, interval_mode) do update set
+            avg_value   = excluded.avg_value,
+            valid_count = excluded.valid_count,
+            total_count = excluded.total_count,
+            updated_at  = now()
+    </insert>
+
+    <insert id="upsertFiveMin" parameterType="java.util.List">
+        insert into asm_stat_5min
+            (data_time, logic_device_unique_id, attr_id, interval_mode, avg_value, valid_count, total_count, updated_at)
+        values
+        <foreach collection="list" item="item" separator=",">
+            (#{item.dataTime, typeHandler=com.ecat.integration.EnvAirStationManagerIntegration.support.TimestamptzInstantTypeHandler},
+             #{item.logicDeviceUniqueId}, #{item.attrId}, #{item.intervalMode},
+             #{item.avgValue}, #{item.validCount}, #{item.totalCount}, now())
+        </foreach>
+        on conflict (data_time, logic_device_unique_id, attr_id, interval_mode) do update set
+            avg_value   = excluded.avg_value,
+            valid_count = excluded.valid_count,
+            total_count = excluded.total_count,
+            updated_at  = now()
+    </insert>
+
+    <insert id="upsertHour" parameterType="java.util.List">
+        insert into asm_stat_hour
+            (data_time, logic_device_unique_id, attr_id, interval_mode, avg_value, valid_count, total_count, updated_at)
+        values
+        <foreach collection="list" item="item" separator=",">
+            (#{item.dataTime, typeHandler=com.ecat.integration.EnvAirStationManagerIntegration.support.TimestamptzInstantTypeHandler},
+             #{item.logicDeviceUniqueId}, #{item.attrId}, #{item.intervalMode},
+             #{item.avgValue}, #{item.validCount}, #{item.totalCount}, now())
+        </foreach>
+        on conflict (data_time, logic_device_unique_id, attr_id, interval_mode) do update set
+            avg_value   = excluded.avg_value,
+            valid_count = excluded.valid_count,
+            total_count = excluded.total_count,
+            updated_at  = now()
+    </insert>
+</mapper>

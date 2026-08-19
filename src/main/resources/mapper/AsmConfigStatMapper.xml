@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.ecat.integration.EnvAirStationManagerIntegration.mapper.AsmConfigStatMapper">
+
+    <!-- 每 series 聚合配置；created_at/updated_at timestamptz 走 TimestamptzInstantTypeHandler。
+         type FQCN：非 BaseEntity 实体短别名不注册（DynamicJarLoader 只注册 domain/+BaseEntity），短名会抛。 -->
+    <resultMap type="com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmConfigStat" id="AsmConfigStatResult">
+        <result property="logicDeviceUniqueId"  column="logic_device_unique_id"/>
+        <result property="attrId"                column="attr_id"/>
+        <result property="enabled"               column="enabled"/>
+        <result property="granularityMask"       column="granularity_mask"/>
+        <result property="materializationMode"   column="materialization_mode"/>
+        <result property="createdAt"             column="created_at" typeHandler="com.ecat.integration.EnvAirStationManagerIntegration.support.TimestamptzInstantTypeHandler"/>
+        <result property="updatedAt"             column="updated_at" typeHandler="com.ecat.integration.EnvAirStationManagerIntegration.support.TimestamptzInstantTypeHandler"/>
+    </resultMap>
+
+    <sql id="cols">
+        logic_device_unique_id, attr_id, enabled, granularity_mask, materialization_mode, created_at, updated_at
+    </sql>
+
+    <select id="selectAll" resultMap="AsmConfigStatResult">
+        select <include refid="cols"/> from asm_config_stat
+        order by logic_device_unique_id, attr_id
+    </select>
+
+    <select id="selectBySeries" resultMap="AsmConfigStatResult">
+        select <include refid="cols"/> from asm_config_stat
+        where logic_device_unique_id = #{logicDeviceUniqueId}
+          and attr_id = #{attrId}
+    </select>
+
+    <!-- upsert：on conflict(uid, attr) do update 覆盖 enabled/mask/mode + 刷 updated_at（人工配置端点专用）。 -->
+    <insert id="upsert" parameterType="com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmConfigStat">
+        insert into asm_config_stat
+            (logic_device_unique_id, attr_id, enabled, granularity_mask, materialization_mode, created_at, updated_at)
+        values
+            (#{logicDeviceUniqueId}, #{attrId}, #{enabled}, #{granularityMask}, #{materializationMode}, now(), now())
+        on conflict (logic_device_unique_id, attr_id) do update set
+            enabled              = excluded.enabled,
+            granularity_mask     = excluded.granularity_mask,
+            materialization_mode = excluded.materialization_mode,
+            updated_at           = now()
+    </insert>
+
+    <!-- insertIfAbsent：on conflict do nothing——已存在行（人工配置）原样保留；seed 默认行专用。 -->
+    <insert id="insertIfAbsent" parameterType="com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmConfigStat">
+        insert into asm_config_stat
+            (logic_device_unique_id, attr_id, enabled, granularity_mask, materialization_mode, created_at, updated_at)
+        values
+            (#{logicDeviceUniqueId}, #{attrId}, #{enabled}, #{granularityMask}, #{materializationMode}, now(), now())
+        on conflict (logic_device_unique_id, attr_id) do nothing
+    </insert>
+</mapper>
