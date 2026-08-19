@@ -1,0 +1,21 @@
+{
+  "name": "env-air-station-manager-e2e",
+  "version": "1.0.0",
+  "description": "Playwright E2E tests for ASM (env-air-station-manager) ruoyi 集成页面（黑盒验收 G 段）",
+  "scripts": {
+    "test:asm-e2e": "playwright test",
+    "test:asm-e2e:headed": "playwright test --headed",
+    "test:g1": "playwright test --grep @g1",
+    "test:g2": "playwright test --grep @g2",
+    "test:g3": "playwright test --grep @g3",
+    "report": "playwright show-report",
+    "test:g4": "playwright test --grep @g4"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.48.0",
+    "@types/node": "^20.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

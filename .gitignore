@@ -7,3 +7,6 @@ target/
 # 前端构建产物与依赖(部署时 npm install + npm run release 重新生成)
 dist/
 node_modules/
+
+# e2e 截图输出目录（g4-screenshots.ts 产物，人工核验用不入库）
+docs/screenshots/
