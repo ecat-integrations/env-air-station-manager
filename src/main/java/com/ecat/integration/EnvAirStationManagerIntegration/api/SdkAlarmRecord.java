@@ -23,6 +23,7 @@ public class SdkAlarmRecord {
     Instant startTime;
     Instant endTime;
     String description;
+    /** 生命周期态：ACTIVE（活跃中，endTime=null）/ INACTIVE（已闭单）。 */
     String status;
     String resultContent;
 }

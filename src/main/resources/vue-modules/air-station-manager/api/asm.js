@@ -10,11 +10,12 @@
 import request from '@/utils/request'
 
 /**
- * 站房设备当前态快照（GET /asm-monitor/snapshot）。
+ * 站房设备当前态快照（GET /asm-monitor/snapshot，对齐 ADM unit gate）。
+ * @param {string} [unit] 显示单位模式：'standard'（默认，STANDARD 行标准口径）/ 'custom'（MONITOR 偏好换算）
  * @returns {Promise} res.data = [{logicDeviceUniqueId, attrs:[{attrId,value,valueText,unit,updateTime,source}]}]
  */
-export function getSnapshot() {
-  return request({ url: '/asm-monitor/snapshot', method: 'get' })
+export function getSnapshot(unit) {
+  return request({ url: '/asm-monitor/snapshot', method: 'get', params: unit ? { unit } : undefined })
 }
 
 /**
@@ -70,7 +71,7 @@ export function removeAlarmRule(id) {
 
 /**
  * 报警记录分页（GET /asm-monitor/alarm-record/list）。
- * @param {object} q { start, end, uid?, pageNum, pageSize }
+ * @param {object} q { start, end, uid?, status?:'ACTIVE'|'INACTIVE', pageNum, pageSize }
  * @returns {Promise} res.data = { total, rows:[AsmAlarmRecord] }
  */
 export function listAlarmRecords(q) {
@@ -81,6 +82,7 @@ export function listAlarmRecords(q) {
       start: q.start,
       end: q.end,
       uid: q.uid || undefined,
+      status: q.status || undefined,
       pageNum: q.pageNum,
       pageSize: q.pageSize,
     },

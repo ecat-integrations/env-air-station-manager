@@ -4,7 +4,6 @@ import com.ecat.core.Bus.event.DeviceDataChangedEvent;
 import com.ecat.core.Device.DeviceRegistry;
 import com.ecat.core.State.AttrState;
 import com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmAlarmRecord;
-import com.ecat.integration.EnvAirStationManagerIntegration.mapper.AsmAlarmRecordMapper;
 import com.ecat.integration.EnvAirStationManagerIntegration.rule.AsmAlarmRuleDefinition;
 import com.ecat.integration.EnvAirStationManagerIntegration.rule.AsmAlarmRuleEvaluator;
 import com.ecat.integration.EnvAirStationManagerIntegration.rule.AsmAlarmRuleIndex;
@@ -40,7 +39,7 @@ class AsmAlarmRuleConsumerTest {
     @Mock
     private AsmAlarmRuleEvaluator evaluator;
     @Mock
-    private AsmAlarmRecordMapper recordMapper;
+    private com.ecat.integration.EnvAirStationManagerIntegration.service.AsmAlarmLifecycleService lifecycleService;
     @Mock
     private AsmAlarmRuleIndex ruleIndex;
     @Mock
@@ -65,7 +64,7 @@ class AsmAlarmRuleConsumerTest {
                         : "analyzer-dev".equals(inv.getArgument(0)) ? analyzerDevice
                         : "gas-dev".equals(inv.getArgument(0)) ? gasDevice : null);
         consumer = new AsmAlarmRuleConsumer("asm-alarm-rule-test", 10, 100, 60_000L,
-                registry, evaluator, recordMapper, ruleIndex, controlService);
+                registry, evaluator, lifecycleService, ruleIndex, controlService);
     }
 
     @AfterEach
@@ -104,7 +103,7 @@ class AsmAlarmRuleConsumerTest {
         consumer.flush(Collections.singletonList(event("station-dev", "temperature", "30")));
 
         ArgumentCaptor<AsmAlarmRecord> captor = ArgumentCaptor.forClass(AsmAlarmRecord.class);
-        verify(recordMapper).insert(captor.capture());
+        verify(lifecycleService).recordTrigger(captor.capture());
         assertEquals("1", captor.getValue().getAlarmType());
     }
 
@@ -114,7 +113,7 @@ class AsmAlarmRuleConsumerTest {
         when(evaluator.evaluate("logicdevice_station.th", "temperature", "20", t))
                 .thenReturn(Collections.emptyList());
         consumer.flush(Collections.singletonList(event("station-dev", "temperature", "20")));
-        verify(recordMapper, never()).insert(any(AsmAlarmRecord.class));
+        verify(lifecycleService, never()).recordTrigger(any(AsmAlarmRecord.class));
     }
 
     @Test
@@ -123,7 +122,7 @@ class AsmAlarmRuleConsumerTest {
                 event("analyzer-dev", "concentration", "1.0"),   // ADM 分析仪
                 event("orphan-dev", "x", "1")));                 // 孤儿事件
         verifyNoInteractions(evaluator);
-        verify(recordMapper, never()).insert(any(AsmAlarmRecord.class));
+        verify(lifecycleService, never()).recordTrigger(any(AsmAlarmRecord.class));
     }
 
     @Test
@@ -140,8 +139,8 @@ class AsmAlarmRuleConsumerTest {
         when(evaluator.evaluate("logicdevice_station.th", "temperature", "30", t))
                 .thenReturn(Arrays.asList(r1, r2));
         consumer.flush(Collections.singletonList(event("station-dev", "temperature", "30")));
-        verify(recordMapper).insert(r1);
-        verify(recordMapper).insert(r2);
+        verify(lifecycleService).recordTrigger(r1);
+        verify(lifecycleService).recordTrigger(r2);
     }
 
     // ===== P4 type=8 标气泄漏联动：触发 → 经控制服务以 LOCAL/asm-alarm 写排风扇 =====
@@ -208,7 +207,7 @@ class AsmAlarmRuleConsumerTest {
         consumer.flush(Collections.singletonList(
                 event("gas-dev", "co_concentration", "15")));
 
-        verify(recordMapper).insert(fired);  // 报警照落
+        verify(lifecycleService).recordTrigger(fired);  // 报警照落
         verifyNoInteractions(controlService);
     }
 
@@ -235,6 +234,6 @@ class AsmAlarmRuleConsumerTest {
         consumer.flush(Collections.singletonList(
                 event("gas-dev", "co_concentration", "15")));
 
-        verify(recordMapper).insert(fired);  // 联动失败不拖累报警落库
+        verify(lifecycleService).recordTrigger(fired);  // 联动失败不拖累报警落库
     }
 }

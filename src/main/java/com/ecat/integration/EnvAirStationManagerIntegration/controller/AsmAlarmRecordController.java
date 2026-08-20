@@ -2,6 +2,7 @@ package com.ecat.integration.EnvAirStationManagerIntegration.controller;
 
 import com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmAlarmRecord;
 import com.ecat.integration.EnvAirStationManagerIntegration.mapper.AsmAlarmRecordMapper;
+import com.ecat.integration.EnvAirStationManagerIntegration.support.AsmAlarmStatus;
 import com.ruoyi.common.core.controller.BaseController;
 import com.ruoyi.common.core.domain.AjaxResult;
 import lombok.RequiredArgsConstructor;
@@ -41,6 +42,7 @@ public class AsmAlarmRecordController extends BaseController {
      * @param start   起始壁钟时刻（ISO LocalDateTime 串，必填）
      * @param end     结束壁钟时刻（同上，必填）
      * @param uid     设备过滤（可选）
+     * @param status  生命周期过滤（可选：ACTIVE/INACTIVE，缺省全部；大小写不敏感）
      * @param pageNum 页码（缺省 1）
      * @param pageSize 每页行数（缺省 50，上限 1000）
      */
@@ -49,6 +51,7 @@ public class AsmAlarmRecordController extends BaseController {
     public AjaxResult list(@RequestParam String start,
                            @RequestParam String end,
                            @RequestParam(value = "uid", required = false) String uid,
+                           @RequestParam(value = "status", required = false) String status,
                            @RequestParam(value = "pageNum", required = false) Integer pageNum,
                            @RequestParam(value = "pageSize", required = false) Integer pageSize) {
         if (start == null || end == null) {
@@ -61,11 +64,12 @@ public class AsmAlarmRecordController extends BaseController {
         if (!from.isBefore(to)) {
             throw new IllegalArgumentException("start 必须早于 end");
         }
+        String statusFilter = normalizeStatus(status);
         java.time.Instant startInstant = from.atZone(JVM_ZONE).toInstant();
         java.time.Instant endInstant = to.atZone(JVM_ZONE).toInstant();
-        long total = recordMapper.countList(uid, startInstant, endInstant);
+        long total = recordMapper.countList(uid, statusFilter, startInstant, endInstant);
         List<AsmAlarmRecord> rows = total == 0 ? java.util.Collections.emptyList()
-                : recordMapper.selectList(uid, startInstant, endInstant, page * size);
+                : recordMapper.selectList(uid, statusFilter, startInstant, endInstant, page * size);
         // 简易分页：取前 page*size 后按页切（记录量小；超深翻页由 1000 上限约束）
         int fromIdx = (page - 1) * size;
         List<AsmAlarmRecord> pageRows = fromIdx >= rows.size() ? java.util.Collections.<AsmAlarmRecord>emptyList()
@@ -74,5 +78,13 @@ public class AsmAlarmRecordController extends BaseController {
         data.put("total", total);
         data.put("rows", pageRows);
         return AjaxResult.success(data);
+    }
+
+    /** status 归一：null/空白=不过滤；仅认 ACTIVE/INACTIVE（AsmAlarmStatus），非法值显式抛。 */
+    private static String normalizeStatus(String status) {
+        if (status == null || status.trim().isEmpty()) {
+            return null;
+        }
+        return AsmAlarmStatus.valueOf(status.trim().toUpperCase()).name();
     }
 }

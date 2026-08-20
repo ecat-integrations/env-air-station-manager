@@ -26,7 +26,7 @@ public class SdkSnapshotAttr {
     /** 非数值展示串（null=数值属性）。 */
     String valueText;
 
-    /** value 实际单位（full key；null=无量纲）。 */
+    /** value 实际单位符号（UnitInfo.getName，如 °C/V；null=无量纲。与 snapshot REST 出口同口径）。 */
     String unit;
 
     /** 值时刻（LIVE=实时态 / RAW=样本时刻）。 */

@@ -141,4 +141,27 @@ class AsmUnitContractResolveDisplayTest {
         assertEquals(Double.valueOf(220.0), v.getValue());
         assertFalse(v.isConverted());
     }
+
+    @Test
+    void standardPurposeMustResolveOwnRow() {
+        // standard 模式读 STANDARD purpose 行（seed 默认=native，可被管理员精化），与 MONITOR 行互不串台
+        mockRows(row(AsmUnitPurpose.STANDARD, VoltageUnit.VOLT.getFullUnitString()),
+                row(AsmUnitPurpose.MONITOR, VoltageUnit.MILLIVOLT.getFullUnitString()));
+        AsmDisplayValue v = contract.resolveDisplay(AsmUnitPurpose.STANDARD, UID, ATTR, 220.0,
+                VoltageUnit.VOLT.getFullUnitString());
+        assertEquals(Double.valueOf(220.0), v.getValue());
+        assertEquals(VoltageUnit.VOLT.getFullUnitString(), v.getUnit());
+        assertFalse(v.isConverted(), "STANDARD 行=V 源=V → 直通（MONITOR 行 mV 不影响 standard 出口）");
+    }
+
+    @Test
+    void standardPurposeMissingRowMustFallBackToNative() {
+        // STANDARD 行缺失（seed 未跑/未来新参数）→ native 保底（与 MONITOR 同口径）
+        mockRows(row(AsmUnitPurpose.MONITOR, VoltageUnit.MILLIVOLT.getFullUnitString()));
+        AsmDisplayValue v = contract.resolveDisplay(AsmUnitPurpose.STANDARD, UID, ATTR, 220.0,
+                VoltageUnit.VOLT.getFullUnitString());
+        assertEquals(Double.valueOf(220.0), v.getValue());
+        assertEquals(VoltageUnit.VOLT.getFullUnitString(), v.getUnit());
+        assertFalse(v.isConverted());
+    }
 }

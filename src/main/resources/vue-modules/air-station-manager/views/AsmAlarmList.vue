@@ -19,6 +19,12 @@
             {{ d.logicDeviceUniqueId }}
           </option>
         </select>
+        <span class="asm-label" style="margin-left:12px">状态</span>
+        <select v-model="filter.status" @change="onStatusPick">
+          <option value="">全部</option>
+          <option value="ACTIVE">活跃</option>
+          <option value="INACTIVE">已恢复</option>
+        </select>
         <button class="asm-btn primary" :disabled="loading" @click="search">查询</button>
       </div>
     </div>
@@ -31,6 +37,13 @@
         <template #default="{ row }">{{ formatLocalDateTime(row.startTime) }}</template>
       </el-table-column>
       <el-table-column prop="ruleName" label="规则名" min-width="130" />
+      <el-table-column label="状态" width="90">
+        <template #default="{ row }">
+          <span class="asm-st-badge" :class="row.status === 'ACTIVE' ? 'active' : 'inactive'">
+            {{ row.status === 'ACTIVE' ? '活跃' : '已恢复' }}
+          </span>
+        </template>
+      </el-table-column>
       <el-table-column prop="alarmType" label="报警类型" min-width="150" />
       <el-table-column prop="logicDeviceUniqueId" label="设备" min-width="170" show-overflow-tooltip />
       <el-table-column prop="attrId" label="参数" min-width="110" />
@@ -65,6 +78,7 @@ export default {
         start: formatLocalInputSeconds(new Date(now.getTime() - 7 * 24 * 3600 * 1000)),
         end: formatLocalInputSeconds(now),
         uid: '',
+        status: '',
         pageNum: 1,
         pageSize: 50,
       },
@@ -86,6 +100,11 @@ export default {
     severityTag(s) {
       return { 0: 'info', 1: 'warning', 2: 'danger' }[s] || 'info'
     },
+    // 状态筛选切换回第 1 页再查（避免停留在越界页号看到伪空态）
+    onStatusPick() {
+      this.filter.pageNum = 1
+      this.search()
+    },
     turn(delta) {
       this.filter.pageNum += delta
       this.search()
@@ -93,9 +112,11 @@ export default {
     async search() {
       this.loading = true
       try {
+        this.filter.pageNum = Math.max(1, this.filter.pageNum)
         const res = await listAlarmRecords({
           start: this.filter.start, end: this.filter.end,
-          uid: this.filter.uid, pageNum: this.filter.pageNum, pageSize: this.filter.pageSize,
+          uid: this.filter.uid, status: this.filter.status || undefined,
+          pageNum: this.filter.pageNum, pageSize: this.filter.pageSize,
         })
         const data = (res && res.data) || {}
         this.rows = data.rows || []
@@ -118,4 +139,7 @@ export default {
 .asm-btn { padding: 4px 14px; border: 1px solid #dcdfe6; border-radius: 4px; background: #fff; cursor: pointer; }
 .asm-btn.primary { background: #409eff; color: #fff; }
 .asm-pager { display: flex; align-items: center; gap: 12px; margin-top: 10px; color: #606266; }
+.asm-st-badge { font-size: 12px; padding: 1px 8px; border-radius: 10px; }
+.asm-st-badge.active { background: #fef2f2; color: #f56c6c; border: 1px solid #fecaca; }
+.asm-st-badge.inactive { background: #f3f4f6; color: #909399; border: 1px solid #d1d5db; }
 </style>

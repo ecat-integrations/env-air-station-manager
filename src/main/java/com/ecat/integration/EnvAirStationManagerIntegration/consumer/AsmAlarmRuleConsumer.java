@@ -7,7 +7,7 @@ import com.ecat.core.Device.DeviceRegistry;
 import com.ecat.core.Utils.Log;
 import com.ecat.core.Utils.LogFactory;
 import com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmAlarmRecord;
-import com.ecat.integration.EnvAirStationManagerIntegration.mapper.AsmAlarmRecordMapper;
+import com.ecat.integration.EnvAirStationManagerIntegration.service.AsmAlarmLifecycleService;
 import com.ecat.integration.EnvAirStationManagerIntegration.rule.AsmAlarmRuleDefinition;
 import com.ecat.integration.EnvAirStationManagerIntegration.rule.AsmAlarmRuleEvaluator;
 import com.ecat.integration.EnvAirStationManagerIntegration.rule.AsmAlarmRuleIndex;
@@ -37,18 +37,18 @@ public class AsmAlarmRuleConsumer extends AbstractBatchBusConsumer<DeviceDataCha
 
     private final DeviceRegistry registry;
     private final AsmAlarmRuleEvaluator evaluator;
-    private final AsmAlarmRecordMapper recordMapper;
+    private final AsmAlarmLifecycleService lifecycleService;
     private final AsmAlarmRuleIndex ruleIndex;
     private final AsmControlService controlService;
 
     public AsmAlarmRuleConsumer(String name, int capacity, int batchSize, long flushIntervalMs,
                                 DeviceRegistry registry, AsmAlarmRuleEvaluator evaluator,
-                                AsmAlarmRecordMapper recordMapper, AsmAlarmRuleIndex ruleIndex,
+                                AsmAlarmLifecycleService lifecycleService, AsmAlarmRuleIndex ruleIndex,
                                 AsmControlService controlService) {
         super(name, capacity, batchSize, flushIntervalMs);
         this.registry = registry;
         this.evaluator = evaluator;
-        this.recordMapper = recordMapper;
+        this.lifecycleService = lifecycleService;
         this.ruleIndex = ruleIndex;
         this.controlService = controlService;
     }
@@ -71,11 +71,11 @@ public class AsmAlarmRuleConsumer extends AbstractBatchBusConsumer<DeviceDataCha
             List<AsmAlarmRecord> triggered = evaluator.evaluate(uid, evt.getAttrId(), displayValue,
                     evt.getNewState().getLastUpdated());
             for (AsmAlarmRecord record : triggered) {
-                recordMapper.insert(record);
+                lifecycleService.recordTrigger(record);
                 executeLinkage(uid, evt.getAttrId(), record);
             }
-            // P4 type=8 等联动动作：报警触发后经统一控制服务以 LOCAL/asm-alarm 写联动设备（排风扇），
-            // 联动失败只 log 不拖累报警落库（控制侧已落 FAILED 审计）
+            // 心跳窗模型：每次命中都走 recordTrigger（续期也触发联动——泄漏持续期间排风扇持续保持，
+            // 符合原意图）；type=8 等联动失败只 log 不拖累报警落库（控制侧已落 FAILED 审计）
         }
     }
 

@@ -14,40 +14,106 @@
         <result property="endTime"             column="end_time" typeHandler="com.ecat.integration.EnvAirStationManagerIntegration.support.TimestamptzInstantTypeHandler"/>
         <result property="description"         column="description"/>
         <result property="status"              column="status"/>
+        <result property="lastBreachTime"      column="last_breach_time" typeHandler="com.ecat.integration.EnvAirStationManagerIntegration.support.TimestamptzInstantTypeHandler"/>
         <result property="resultContent"       column="result_content"/>
         <result property="createdAt"           column="created_at" typeHandler="com.ecat.integration.EnvAirStationManagerIntegration.support.TimestamptzInstantTypeHandler"/>
     </resultMap>
 
+    <sql id="allColumns">
+        id, alarm_type, rule_name, logic_device_unique_id, attr_id, severity,
+        start_time, end_time, description, status, last_breach_time, result_content, created_at
+    </sql>
+
+    <!-- 新 episode 落 ACTIVE 行：start_time=首触发，end_time=null（活跃中无结束时刻），last_breach_time=now。 -->
     <insert id="insert" parameterType="com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmAlarmRecord"
             useGeneratedKeys="true" keyProperty="id">
         insert into asm_alarm_record
             (alarm_type, rule_name, logic_device_unique_id, attr_id, severity,
-             start_time, end_time, description, status, result_content, created_at)
+             start_time, end_time, description, status, last_breach_time, result_content, created_at)
         values
             (#{alarmType}, #{ruleName}, #{logicDeviceUniqueId}, #{attrId}, #{severity},
-             #{startTime}, #{endTime}, #{description}, #{status}, #{resultContent}, now())
+             #{startTime, typeHandler=com.ecat.integration.EnvAirStationManagerIntegration.support.TimestamptzInstantTypeHandler},
+             null, #{description}, #{status},
+             #{lastBreachTime, typeHandler=com.ecat.integration.EnvAirStationManagerIntegration.support.TimestamptzInstantTypeHandler},
+             #{resultContent}, now())
     </insert>
 
-    <select id="selectList" resultMap="AsmAlarmRecordResult">
-        select id, alarm_type, rule_name, logic_device_unique_id, attr_id, severity,
-               start_time, end_time, description, status, result_content, created_at
+    <select id="selectActive" resultMap="AsmAlarmRecordResult">
+        select <include refid="allColumns"/>
         from asm_alarm_record
-        where end_time &gt;= #{start}
-          and end_time &lt; #{end}
+        where logic_device_unique_id = #{logicDeviceUniqueId}
+          and attr_id = #{attrId}
+          and alarm_type = #{alarmType}
+          and status = 'ACTIVE'
+        limit 1
+    </select>
+
+    <update id="extendActive">
+        update asm_alarm_record
+        set last_breach_time = #{lastBreachTime, typeHandler=com.ecat.integration.EnvAirStationManagerIntegration.support.TimestamptzInstantTypeHandler}
+        where id = #{id} and status = 'ACTIVE'
+    </update>
+
+    <select id="selectAllActive" resultMap="AsmAlarmRecordResult">
+        select <include refid="allColumns"/>
+        from asm_alarm_record
+        where status = 'ACTIVE'
+    </select>
+
+    <update id="closeBatch">
+        update asm_alarm_record
+        set status = 'INACTIVE',
+            end_time = #{now, typeHandler=com.ecat.integration.EnvAirStationManagerIntegration.support.TimestamptzInstantTypeHandler}
+        where status = 'ACTIVE'
+          and id in
+        <foreach collection="ids" item="id" open="(" separator="," close=")">
+            #{id}
+        </foreach>
+    </update>
+
+    <!-- 窗口锚点：ACTIVE 行 end_time=null（活跃中无结束时刻），带 status 过滤时锚 COALESCE(end_time,
+         last_breach_time) 才能把活跃行查出来；不带 status 保持原 end_time 落窗口径（历史触发记录）。 -->
+    <select id="selectList" resultMap="AsmAlarmRecordResult">
+        select <include refid="allColumns"/>
+        from asm_alarm_record
+        <choose>
+            <when test="status != null">
+                where COALESCE(end_time, last_breach_time) &gt;= #{start}
+                  and COALESCE(end_time, last_breach_time) &lt; #{end}
+            </when>
+            <otherwise>
+                where end_time &gt;= #{start}
+                  and end_time &lt; #{end}
+            </otherwise>
+        </choose>
         <if test="logicDeviceUniqueId != null">
           and logic_device_unique_id = #{logicDeviceUniqueId}
         </if>
-        order by end_time desc
+        <if test="status != null">
+          and status = #{status}
+        </if>
+        order by COALESCE(end_time, last_breach_time) desc
         limit #{limit}
     </select>
 
     <select id="countList" resultType="long">
         select count(*)
         from asm_alarm_record
-        where end_time &gt;= #{start}
-          and end_time &lt; #{end}
+        <choose>
+            <when test="status != null">
+                where COALESCE(end_time, last_breach_time) &gt;= #{start}
+                  and COALESCE(end_time, last_breach_time) &lt; #{end}
+            </when>
+            <otherwise>
+                where end_time &gt;= #{start}
+                  and end_time &lt; #{end}
+            </otherwise>
+        </choose>
         <if test="logicDeviceUniqueId != null">
           and logic_device_unique_id = #{logicDeviceUniqueId}
+        </if>
+        <if test="status != null">
+          and status = #{status}
         </if>
     </select>
 </mapper>

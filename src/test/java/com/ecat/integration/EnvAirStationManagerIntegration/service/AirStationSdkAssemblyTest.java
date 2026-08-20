@@ -291,12 +291,12 @@ class AirStationSdkAssemblyTest {
 
     @Test
     void queryAlarmRecords_emptyAndMultiRows_mapping() {
-        when(alarmRecordMapper.selectList(null, START, END, 100)).thenReturn(Collections.emptyList());
+        when(alarmRecordMapper.selectList(null, null, START, END, 100)).thenReturn(Collections.emptyList());
         assertTrue(sdk.queryAlarmRecords(null, START, END, 100).isEmpty());
 
         Instant s1 = Instant.parse("2026-08-18T00:10:00Z");
         Instant e1 = Instant.parse("2026-08-18T00:25:00Z");
-        when(alarmRecordMapper.selectList(UID, START, END, 50)).thenReturn(Arrays.asList(
+        when(alarmRecordMapper.selectList(UID, null, START, END, 50)).thenReturn(Arrays.asList(
                 AsmAlarmRecord.builder()
                         .alarmType("LIMIT").ruleName("电压上限").logicDeviceUniqueId(UID)
                         .attrId("voltage").severity("HIGH").startTime(s1).endTime(e1)

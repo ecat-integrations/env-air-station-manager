@@ -31,7 +31,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * <p><b>幂等</b>：DB 侧 ON CONFLICT DO NOTHING（已存在行——含人工配置/人工精化 unit——原样保留）；
  * 进程侧 seen set 去重（同 series 每 process 只发一次 insertIfAbsent，热路径零 DB）。</p>
  *
- * <p><b>默认值</b>：config_stat(enabled=true, mask=全开, BOTH) + config_unit(STORAGE, native unit)。
+ * <p><b>默认值</b>：config_stat(enabled=true, mask=全开, BOTH) + config_unit(STORAGE 与 STANDARD 双行, native unit)。
  * native unit 取 airstation attr 定义（{@link NumberAttribute#getNativeUnit()}，即 LogicAttributeDefine 注入值）；
  * 无单位写空串占位（行存在表达「已 seed」，读出口遇空串按显原生不换算）。</p>
  *
@@ -114,6 +114,16 @@ public class AsmSeedService {
                 .logicDeviceUniqueId(uid)
                 .attrId(attrId)
                 .purpose(AsmUnitPurpose.STORAGE.name())
+                .unit(nativeUnit)
+                .createdBy(SEED_ACTOR)
+                .updatedBy(SEED_ACTOR)
+                .build());
+        // STANDARD 行（standard 模式读出口）：默认与 STORAGE 同源=attr nativeUnit，管理员可后续精化；
+        // 对齐 ADM 双模式（standard 读 STANDARD 行 / custom 读 MONITOR 行）
+        configUnitMapper.insertIfAbsent(AsmConfigUnit.builder()
+                .logicDeviceUniqueId(uid)
+                .attrId(attrId)
+                .purpose(AsmUnitPurpose.STANDARD.name())
                 .unit(nativeUnit)
                 .createdBy(SEED_ACTOR)
                 .updatedBy(SEED_ACTOR)

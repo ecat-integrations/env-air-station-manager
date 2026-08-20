@@ -157,7 +157,7 @@ public class AirStationSdkImpl implements AirStationSdk {
         if (limit < 1 || limit > 1000) {
             throw new IllegalArgumentException("limit 须在 1..1000: " + limit);
         }
-        List<AsmAlarmRecord> rows = alarmRecordMapper.selectList(logicDeviceUniqueId, start, end, limit);
+        List<AsmAlarmRecord> rows = alarmRecordMapper.selectList(logicDeviceUniqueId, null, start, end, limit);
         if (rows == null || rows.isEmpty()) {
             return Collections.emptyList();
         }

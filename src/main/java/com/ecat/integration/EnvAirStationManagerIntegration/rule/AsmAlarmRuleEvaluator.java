@@ -4,6 +4,7 @@ import com.alibaba.fastjson2.JSONObject;
 import com.ecat.core.Utils.Log;
 import com.ecat.core.Utils.LogFactory;
 import com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmAlarmRecord;
+import com.ecat.integration.EnvAirStationManagerIntegration.support.AsmAlarmStatus;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
@@ -30,8 +31,10 @@ import java.util.concurrent.ConcurrentHashMap;
  *   <li><b>断电+恢复</b>：低于阈值报警，恢复后 force 记录「恢复」（不去重，对齐原 insertAlarmForce）。</li>
  * </ul>
  *
- * <p><b>去重窗口</b>：同 (uid, attrId, alarmType) 5 分钟内重复报警抑制（对齐原 alarmCache 语义，
- * key 用复合对象修复拼接碰撞）。<b>时间源</b>注入 {@link Clock}（测试手动推进，禁 sleep）。</p>
+ * <p><b>心跳窗生命周期</b>（替代旧 5min 去重 alarmCache）：每次命中都产出触发记录（status=ACTIVE、
+ * end_time=null、last_breach_time=now），续期/新插/闭单由 {@code AsmAlarmLifecycleService} +
+ * {@code AsmAlarmSweepScheduler} 收口（镜像 ADM 单一身份 extend-or-insert 模型）。
+ * <b>时间源</b>注入 {@link Clock}（测试手动推进，禁 sleep）。</p>
  *
  * <p><b>运行时隔离</b>：单规则评估抛异常（如数值规则遇非数值 displayValue）记 error 日志跳过，
  * 同 series 其余规则照常评估——与索引层解析隔离双保险。</p>
@@ -41,9 +44,6 @@ import java.util.concurrent.ConcurrentHashMap;
 @Service
 @RequiredArgsConstructor
 public class AsmAlarmRuleEvaluator {
-
-    /** 去重窗口（对齐原 alarmCache 5 分钟语义）。 */
-    static final Duration DEDUP_WINDOW = Duration.ofMinutes(5);
 
     private final Log log = LogFactory.getLogger(getClass());
 
@@ -81,9 +81,6 @@ public class AsmAlarmRuleEvaluator {
 
     /** 持续时间起算表（key=复合 SeriesRuleKey；value=首超限时刻，恢复正常即移除）。 */
     private final Map<SeriesRuleKey, Instant> durationMap = new ConcurrentHashMap<>();
-
-    /** 报警去重缓存（key 同上；value=最近触发时刻）。 */
-    private final Map<SeriesRuleKey, Instant> alarmCache = new ConcurrentHashMap<>();
 
     /**
      * 评估一次属性更新事件：该 series 上每条规则独立评估，命中产出待落库记录（0..N 条）。
@@ -244,25 +241,21 @@ public class AsmAlarmRuleEvaluator {
     /** 去重窗口内抑制；命中后刷 cache 并产出记录（severity 来自规则配置，修复点4）。 */
     private AsmAlarmRecord insertAlarm(AsmAlarmRuleDefinition rule, String uid, String attrId,
                                        Instant startTime, Instant now, String description, String resultContent) {
-        SeriesRuleKey dedupKey = new SeriesRuleKey(uid, attrId, rule.getAlarmType());
-        Instant last = alarmCache.get(dedupKey);
-        if (last != null && Duration.between(last, now).compareTo(DEDUP_WINDOW) < 0) {
-            log.info("[诊断调试] 报警忽略：类型[" + uid + "/" + attrId + "/" + rule.getAlarmType()
-                    + "] 在5分钟内已触发过报警");
-            return null;
-        }
-        alarmCache.put(dedupKey, now);
         return buildRecord(rule, uid, attrId, startTime, now, description, resultContent);
     }
 
-    /** 恢复类记录：force（不去重）。 */
+    /** 恢复类记录：终态 INACTIVE 行（end_time=恢复时刻）+ recovery 标记（生命周期层据此闭 ACTIVE 行）。 */
     private AsmAlarmRecord forceInsert(AsmAlarmRuleDefinition rule, String uid, String attrId,
                                        Instant startTime, Instant now, String description, String resultContent) {
-        return buildRecord(rule, uid, attrId, startTime, now, description, resultContent);
+        AsmAlarmRecord record = buildRecord(rule, uid, attrId, startTime, now, description, resultContent);
+        record.setStatus(AsmAlarmStatus.INACTIVE.name());
+        record.setEndTime(now);
+        record.setRecovery(true);
+        return record;
     }
 
     private static AsmAlarmRecord buildRecord(AsmAlarmRuleDefinition rule, String uid, String attrId,
-                                              Instant startTime, Instant endTime, String description,
+                                              Instant startTime, Instant now, String description,
                                               String resultContent) {
         return AsmAlarmRecord.builder()
                 .alarmType(rule.getAlarmType())
@@ -271,9 +264,10 @@ public class AsmAlarmRuleEvaluator {
                 .attrId(attrId)
                 .severity(rule.getSeverity())
                 .startTime(startTime)
-                .endTime(endTime)
+                .endTime(null)
                 .description(description)
-                .status("0")
+                .status(AsmAlarmStatus.ACTIVE.name())
+                .lastBreachTime(now)
                 .resultContent(resultContent)
                 .build();
     }

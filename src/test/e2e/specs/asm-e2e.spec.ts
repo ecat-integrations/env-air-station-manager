@@ -5,7 +5,7 @@
  *   G1 六页渲染：.app-main innerText 非空 + .asm-page 挂载 + console/pageerror 0（ignoreCache reload）。
  *   G2 核心功能：
  *     - history_data 查询出图出表（echarts canvas + 明细行>0，参数池来自 stat-params 真实候选）。
- *     - monitor 30s 轮询（35s 窗内 snapshot 请求 ≥2）。
+ *     - monitor SSE 实时推送（/asm-monitor/stream 请求 + ≥1 帧 device.data.update 增量 patch）。
  *     - alarm_rule 列表加载 + 编辑弹窗改 duration 5→6 保存生效 → 还原 5（rule=设备间温度异常，seed 确定存在）。
  *     - control_list 下发 exhaust_fan speed=low → 刷新回查终态 SUCCESS → 还原 off。
  *     - config 页 config-stat 首行 materializationMode BOTH→FRONT 保存生效 → 还原 BOTH。
@@ -84,23 +84,34 @@ test.describe('ASM 黑盒验收 G 段', () => {
     expect(errors, `不应有 console error/pageerror: ${errors.join(' | ')}`).toEqual([]);
   });
 
-  test('G2-monitor 30s 轮询更新（mount 后 30s tick 再发 snapshot） @g2', async ({ page }) => {
-    // 监听器必须在 goto 前挂（goto 含 ignoreCache reload，前后共 2 次 mount 请求都计入）。
-    const stamps: number[] = [];
-    page.on('request', (r) => { if (r.url().includes('/asm-monitor/snapshot')) stamps.push(Date.now()); });
+  test('G2-monitor SSE 实时推送（stream 请求 + ≥1 帧 device.data.update patch 瓦片） @g2', async ({ page }) => {
+    // 监听器必须在 goto 前挂（goto 含 ignoreCache reload，前后共 2 次连接请求都计入）。
+    const streamStamps: number[] = [];
+    page.on('request', (r) => { if (r.url().includes('/asm-monitor/stream')) streamStamps.push(Date.now()); });
 
     const mp = new AsmBasePage(page, 'monitor');
     await mp.goto();
-    await expect(page.locator('.asm-card').first()).toBeVisible();
+    // 分组瓦片墙挂载（snapshot 全量初始化的渲染证据；37 台一屏瓦片）
+    await expect(page.locator('.asm-group').first()).toBeVisible();
+    await expect(page.locator('.asm-tile').first()).toBeVisible();
 
-    // 30s 轮询属被测节奏本身：≥3 次（2 mount + ≥1 tick）且首末间隔 ≥25s（证明是定时 tick 非重复 mount）。
+    // SSE 长连接请求 ≥1（fetch-based，?token= query + Authorization header 双通道）
     await expect
-      .poll(() => stamps.length, { timeout: 60_000, message: '60s 内应有 ≥3 次 snapshot 请求（2 mount+1 tick）' })
-      .toBeGreaterThanOrEqual(3);
-    expect(stamps[stamps.length - 1] - stamps[0], '首末请求间隔应 ≥25s（定时轮询证据）').toBeGreaterThanOrEqual(25_000);
-    // 手动刷新按钮可用（轮询之外的兜底交互）
+      .poll(() => streamStamps.length, { timeout: 15_000, message: '15s 内应有 ≥1 次 /asm-monitor/stream 请求' })
+      .toBeGreaterThanOrEqual(1);
+
+    // 收到 ≥1 帧 device.data.update：组件在 handleSseUpdate 暴露 window.__asmSseFrames 计数器
+    //（网络面板外的确定性证据；站房设备分钟级采样，60s 窗内必有帧）。
+    await expect
+      .poll(() => page.evaluate(() => (window as any).__asmSseFrames || 0),
+        { timeout: 78_000, message: '78s 内应收到 ≥1 帧 device.data.update（SSE 实时推送证据）' })
+      .toBeGreaterThanOrEqual(1);
+
+    // 断连横幅默认不显示（连接健康）
+    await expect(page.locator('.asm-banner')).toHaveCount(0);
+    // 手动刷新按钮可用（SSE 之外的兜底交互）
     await page.getByRole('button', { name: '手动刷新' }).click();
-    await expect(page.locator('.asm-card').first()).toBeVisible();
+    await expect(page.locator('.asm-tile').first()).toBeVisible();
   });
 
   test('G2-alarm_rule 编辑弹窗改 duration 保存生效并还原 @g2', async ({ page }) => {
@@ -155,20 +166,27 @@ test.describe('ASM 黑盒验收 G 段', () => {
 
     // 轮询终态（PENDING→异步写回，秒级）。列序：0 id /1 时刻 /2 来源 /3 调用方 /4 设备 /5 参数
     //   /6 动作 /7 执行前 /8 请求值 /9 执行后 /10 结果
+    // 扫全行按（请求=low 且 SUCCESS 且 REMOTE）定位本次下发行——同秒多行时 first() 可能命中历史 LOCAL 行。
     const refreshBtn = page.getByRole('button', { name: /刷新（PENDING 终态回查）/ });
+    let lowRowIdx = -1;
     await expect
       .poll(async () => {
         await refreshBtn.click();
-        const row = page.locator('.el-table__row', { hasText: FAN_ATTR }).first();
-        if (!(await row.count())) return 'MISSING';
-        return ((await row.locator('td').nth(10).innerText()) || '').trim(); // 结果列
-      }, { timeout: 60_000, message: '60s 内 speed 行应到 SUCCESS 终态' })
-      .toBe('SUCCESS');
+        const rows = page.locator('.el-table__row', { hasText: FAN_ATTR });
+        const n = await rows.count();
+        for (let i = 0; i < n; i++) {
+          const tds = rows.nth(i).locator('td');
+          const origin = ((await tds.nth(2).innerText()) || '').trim();
+          const req = ((await tds.nth(8).innerText()) || '').trim();
+          const res = ((await tds.nth(10).innerText()) || '').trim();
+          if (origin === 'REMOTE' && req === 'low' && res === 'SUCCESS') { lowRowIdx = i; return 'ok'; }
+        }
+        return `not-found(${n} rows)`;
+      }, { timeout: 60_000, message: '60s 内应有 REMOTE/low/SUCCESS 行' })
+      .toBe('ok');
     // 终态断言：SUCCESS 且 after 非空（E1 语义：终态 SUCCESS 时 after=执行后值）
-    const row = page.locator('.el-table__row', { hasText: FAN_ATTR }).first();
-    const cells = row.locator('td');
+    const cells = page.locator('.el-table__row', { hasText: FAN_ATTR }).nth(lowRowIdx).locator('td');
     expect(((await cells.nth(9).innerText()) || '').trim(), 'SUCCESS 行 after 应非空').not.toBe('');
-    expect(((await cells.nth(2).innerText()) || '').trim(), '来源应 REMOTE').toBe('REMOTE');
 
     // 还原 off
     await page.locator('.asm-filter input[placeholder*="写值"]').fill('off');
@@ -267,10 +285,10 @@ test.describe('ASM 黑盒验收 G 段', () => {
       // monitor 路由 404 是**预期**，只断言「数据卡片为 0」（不渲染任何站房数据）。
       const mp = new AsmBasePage(page, 'monitor');
       await page.goto('/#/login');
-      await page.waitForLoadState('networkidle');
+      await page.waitForLoadState('load');
       await mp.login(userName, userPass);
       await page.goto(mp.route);
-      await page.waitForLoadState('networkidle');
+      await page.waitForLoadState('load');
       await page.waitForTimeout(2000); // 等路由解析与可能的异步 snapshot 拒绝（403）尘埃落定
       expect(await page.locator('.asm-card').count(), '无权限账号不应渲染站房数据卡片').toBe(0);
     } finally {

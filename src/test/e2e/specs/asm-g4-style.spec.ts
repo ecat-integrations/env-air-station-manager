@@ -77,7 +77,8 @@ test.describe('ASM G4 样式结构验证', () => {
   test('G4-3 监控页卡片容器尺寸在 viewport 内 @g4', async ({ page }) => {
     const base = new AsmBasePage(page, 'monitor');
     await base.goto();
-    const cards = page.locator('.asm-cards .asm-card');
+    // 瓦片墙结构（分组瓦片墙改版）：.asm-group > .asm-tiles > .asm-tile
+    const cards = page.locator('.asm-group .asm-tile');
     await expect(cards.first()).toBeVisible({ timeout: 20_000 });
     const n = await cards.count();
     expect(n).toBeGreaterThan(0);

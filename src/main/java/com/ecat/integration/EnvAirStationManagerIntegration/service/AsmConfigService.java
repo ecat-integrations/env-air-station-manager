@@ -83,6 +83,9 @@ public class AsmConfigService {
         if (p == AsmUnitPurpose.STORAGE) {
             throw new IllegalArgumentException("STORAGE 行由 seed 维护（存储单位换算源），配置端点只读写 MONITOR/HISTORY 偏好");
         }
+        if (p == AsmUnitPurpose.STANDARD) {
+            throw new IllegalArgumentException("STANDARD 行由 seed 维护（standard 模式标准口径），配置端点只读写 MONITOR/HISTORY 偏好");
+        }
         AsmConfigUnit row = AsmConfigUnit.builder()
                 .logicDeviceUniqueId(logicDeviceUniqueId)
                 .attrId(attrId)

@@ -101,10 +101,15 @@ class AsmSeedServiceTest {
         assertEquals("BOTH", statCap.getValue().getMaterializationMode());
 
         ArgumentCaptor<AsmConfigUnit> unitCap = ArgumentCaptor.forClass(AsmConfigUnit.class);
-        verify(configUnitMapper).insertIfAbsent(unitCap.capture());
-        assertEquals("STORAGE", unitCap.getValue().getPurpose());
-        assertEquals("TemperatureUnit.CELSIUS", unitCap.getValue().getUnit(), "native unit getFullUnitString key 形式");
-        assertEquals("ASM", unitCap.getValue().getCreatedBy());
+        verify(configUnitMapper, times(2)).insertIfAbsent(unitCap.capture());
+        assertEquals(2, unitCap.getAllValues().size(), "STORAGE + STANDARD 双行（standard 模式读出口同源 seed）");
+        assertEquals("STORAGE", unitCap.getAllValues().get(0).getPurpose());
+        assertEquals("TemperatureUnit.CELSIUS", unitCap.getAllValues().get(0).getUnit(),
+                "native unit getFullUnitString key 形式");
+        assertEquals("STANDARD", unitCap.getAllValues().get(1).getPurpose(),
+                "STANDARD 行与 STORAGE 同源（默认=attr nativeUnit）");
+        assertEquals("TemperatureUnit.CELSIUS", unitCap.getAllValues().get(1).getUnit());
+        assertEquals("ASM", unitCap.getAllValues().get(1).getCreatedBy());
 
         verify(unitContract).invalidate("logicdevice_station.th", "temperature");
     }
@@ -118,8 +123,9 @@ class AsmSeedServiceTest {
         service.seedStartup(Arrays.asList(stationDevice));
 
         ArgumentCaptor<AsmConfigUnit> cap = ArgumentCaptor.forClass(AsmConfigUnit.class);
-        verify(configUnitMapper).insertIfAbsent(cap.capture());
-        assertEquals("", cap.getValue().getUnit(), "无单位空串占位（行存在=已 seed；读出口显原生）");
+        verify(configUnitMapper, times(2)).insertIfAbsent(cap.capture());
+        assertEquals("", cap.getAllValues().get(0).getUnit(), "无单位空串占位（行存在=已 seed；读出口显原生）");
+        assertEquals("", cap.getAllValues().get(1).getUnit(), "STANDARD 行同样空串占位");
     }
 
     @Test
@@ -143,7 +149,7 @@ class AsmSeedServiceTest {
         // 第二次同 series：seen 去重，零 DB
         assertFalse(service.seedSeries("logicdevice_station.th", "temperature", "TemperatureUnit.CELSIUS"));
         verify(configStatMapper, times(1)).insertIfAbsent(any(AsmConfigStat.class));
-        verify(configUnitMapper, times(1)).insertIfAbsent(any(AsmConfigUnit.class));
+        verify(configUnitMapper, times(2)).insertIfAbsent(any(AsmConfigUnit.class));
         verify(unitContract, times(1)).invalidate(anyString(), anyString());
     }
 

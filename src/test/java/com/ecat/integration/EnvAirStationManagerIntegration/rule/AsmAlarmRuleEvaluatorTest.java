@@ -11,6 +11,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -73,7 +74,10 @@ class AsmAlarmRuleEvaluatorTest {
         assertEquals(UID, rec.getLogicDeviceUniqueId());
         assertEquals("temperature", rec.getAttrId());
         assertEquals(T0, rec.getStartTime());
-        assertEquals(T0.plusSeconds(6 * 60), rec.getEndTime());
+        // 心跳窗模型：ACTIVE 行 end_time=null（活跃中无结束时刻），last_breach_time=本次命中
+        assertNull(rec.getEndTime());
+        assertEquals(T0.plusSeconds(6 * 60), rec.getLastBreachTime());
+        assertEquals("ACTIVE", rec.getStatus());
         assertNotNull(rec.getResultContent());
     }
 
@@ -101,20 +105,21 @@ class AsmAlarmRuleEvaluatorTest {
         assertEquals(T0.plusSeconds(120), fired.get(0).getStartTime()); // 若未清除则 start=T0
     }
 
-    // ===== 去重窗口（5 分钟，对齐原语义）=====
+    // ===== 心跳窗（替代旧 5min 去重：每次命中都产出记录，续期/新插归生命周期层）=====
 
     @Test
-    void dedupWindow_suppressesWithinFiveMinutesFiresAfter() {
-        // 用瞬时阈值规则（逐事件可触发）验证 5 分钟去重窗口
+    void heartbeat_everyHitProducesTrigger_noInMemorySuppression() {
+        // 瞬时阈值规则逐事件触发：窗口内重复命中不再被内存去重抑制（续期由 AsmAlarmLifecycleService 收口）
         install("23", "0", "{\"name\":\"t\",\"enabled\":true,\"configurable\":true,"
                 + "\"device_info\":{\"logicdevice_station.th\":[\"pm10_indoor\"]},"
                 + "\"configs\":[{\"type\":\"number\",\"class\":\"pm10_indoor\",\"value\":100}]}");
         clock.set(T0);
-        assertEquals(1, evaluator.evaluate(UID, "pm10_indoor", "150", T0).size());   // 触发 + 记 cache
+        assertEquals(1, evaluator.evaluate(UID, "pm10_indoor", "150", T0).size());
         clock.set(T0.plusSeconds(120));
-        assertEquals(0, evaluator.evaluate(UID, "pm10_indoor", "150", T0.plusSeconds(120)).size()); // 窗口内 → 抑制
-        clock.set(T0.plusSeconds(5 * 60 + 1));
-        assertEquals(1, evaluator.evaluate(UID, "pm10_indoor", "150", T0.plusSeconds(5 * 60 + 1)).size()); // 窗口外 → 再报
+        List<AsmAlarmRecord> again = evaluator.evaluate(UID, "pm10_indoor", "150", T0.plusSeconds(120));
+        assertEquals(1, again.size());                              // 命中即产出（生命周期层 extendActive 续期）
+        assertEquals(T0.plusSeconds(120), again.get(0).getLastBreachTime());
+        assertEquals("ACTIVE", again.get(0).getStatus());
     }
 
     @Test
@@ -197,6 +202,10 @@ class AsmAlarmRuleEvaluatorTest {
                 T0.plusSeconds(30));
         assertEquals(1, recovery.size());
         assertTrue(recovery.get(0).getDescription().contains("恢复"));
+        // 恢复行是终态记录：INACTIVE + end_time=恢复时刻 + recovery 标记（生命周期层据此闭 ACTIVE 行）
+        assertEquals("INACTIVE", recovery.get(0).getStatus());
+        assertEquals(T0.plusSeconds(30), recovery.get(0).getEndTime());
+        assertTrue(recovery.get(0).isRecovery());
 
         // 恢复只发一次：再上报正常电压不再发
         clock.set(T0.plusSeconds(60));

@@ -10,12 +10,26 @@ import com.ecat.core.Integration.IntegrationBase;
 import com.ecat.core.Utils.Log;
 import com.ecat.core.Utils.LogFactory;
 import com.ecat.integration.EcatCoreRuoyiIntegration.EcatCoreRuoyiIntegration;
+import com.ecat.integration.EnvAirStationManagerIntegration.api.AirStationSdk;
+import com.ecat.integration.EnvAirStationManagerIntegration.consumer.AsmAlarmRuleConsumer;
 import com.ecat.integration.EnvAirStationManagerIntegration.consumer.AsmDataSampleConsumer;
+import com.ecat.integration.EnvAirStationManagerIntegration.consumer.AsmSseConsumer;
+import com.ecat.integration.EnvAirStationManagerIntegration.mapper.AsmAlarmRecordMapper;
 import com.ecat.integration.EnvAirStationManagerIntegration.mapper.AsmDataSampleMapper;
+import com.ecat.integration.EnvAirStationManagerIntegration.rule.AsmAlarmRegistry;
+import com.ecat.integration.EnvAirStationManagerIntegration.rule.AsmAlarmRuleEvaluator;
+import com.ecat.integration.EnvAirStationManagerIntegration.rule.AsmAlarmRuleIndex;
+import com.ecat.integration.EnvAirStationManagerIntegration.scheduler.AsmAlarmSweepScheduler;
 import com.ecat.integration.EnvAirStationManagerIntegration.scheduler.AsmStatRefreshScheduler;
+import com.ecat.integration.EnvAirStationManagerIntegration.service.AirStationSdkImpl;
+import com.ecat.integration.EnvAirStationManagerIntegration.service.AsmAlarmLifecycleService;
+import com.ecat.integration.EnvAirStationManagerIntegration.service.AsmControlService;
 import com.ecat.integration.EnvAirStationManagerIntegration.service.AsmSeedService;
 import com.ecat.integration.EnvAirStationManagerIntegration.service.AsmStatPartitionManager;
+import com.ecat.integration.EnvAirStationManagerIntegration.service.AsmUnitContract;
+import com.ecat.integration.EnvAirStationManagerIntegration.sse.AsmSseBroadcaster;
 import com.ecat.integration.logicdevice.LogicDeviceManager;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 /**
  * ASM（Air Station Manager）空气站房管理集成入口。
@@ -25,9 +39,9 @@ import com.ecat.integration.logicdevice.LogicDeviceManager;
  * 设备生命周期归 airstation 集成，本集成只消费 device.data.update 总线数据做
  * 聚合/历史/报警/控制，不建/不删逻辑设备。与 env-air-device-manager 为兄弟集成，互不依赖。</p>
  *
- * <p>P0 脚手架 + P1b 数据管道：onStart 装载 jar 后装配 raw consumer（订阅总线攒批落
- * asm_data_sample + 首见 seed）+ 启动预 seed（枚举 LogicDeviceManager 现存站房设备）+ stat 月分区
- * ensure + 三粒度物化调度器；onPause/onRelease 反向收口。REST/SDK 等按分期 P2-P5 落地。</p>
+ * <p>onStart 装载 jar 后装配 raw consumer（订阅总线攒批落 asm_data_sample + 首见 seed）+
+ * 启动预 seed（枚举 LogicDeviceManager 现存站房设备）+ stat 月分区 ensure + 三粒度物化调度器 +
+ * 报警链路（规则索引/评估 consumer/心跳 sweep）+ 总览页 SSE consumer；onPause/onRelease 反向收口。</p>
  */
 public class EnvAirStationManagerIntegration extends IntegrationBase {
 
@@ -43,12 +57,16 @@ public class EnvAirStationManagerIntegration extends IntegrationBase {
     /** ruoyi 桥接集成（onInit 取得，onStart 用于把本 jar/vue 装载进 ruoyi）。 */
     private EcatCoreRuoyiIntegration mry;
 
-    /** P1b raw 落库 consumer（onStart 装配，onPause/onRelease shutdown）。 */
+    /** raw 落库 consumer（onStart 装配，onPause/onRelease shutdown）。 */
     private AsmDataSampleConsumer asmDataSampleConsumer;
-    /** P1b 三粒度物化调度器（onStart 启动，onPause/onRelease shutdown）。 */
+    /** 三粒度物化调度器（onStart 启动，onPause/onRelease shutdown）。 */
     private AsmStatRefreshScheduler asmStatRefreshScheduler;
-    /** P3 报警评估 consumer（onStart 装配，onPause/onRelease shutdown）。 */
-    private com.ecat.integration.EnvAirStationManagerIntegration.consumer.AsmAlarmRuleConsumer asmAlarmRuleConsumer;
+    /** 报警评估 consumer（onStart 装配，onPause/onRelease shutdown）。 */
+    private AsmAlarmRuleConsumer asmAlarmRuleConsumer;
+    /** 总览页 SSE 广播 consumer（onStart 装配，onPause/onRelease shutdown）。 */
+    private AsmSseConsumer asmSseConsumer;
+    /** 报警心跳 sweep 调度器（onStart 启动，onPause/onRelease shutdown）。 */
+    private AsmAlarmSweepScheduler asmAlarmSweepScheduler;
 
     @Override
     public void onInit() {
@@ -63,7 +81,7 @@ public class EnvAirStationManagerIntegration extends IntegrationBase {
         }
         URLClassLoader classLoader = (URLClassLoader) this.loadOption.getClassLoader();
         // 三层反射注入链：本集成 onStart → mry.loadJarAndVue → RuoyiJarApp → EcatRuoyiAdapter
-        // → StaticResourceDynamicRegistry 注册资源到 ruoyi。P0 无 vue，仅装载 jar。
+        // → StaticResourceDynamicRegistry 注册资源到 ruoyi。
         try {
             mry.loadJarAndVue(classLoader, this);
         } catch (Exception e) {
@@ -75,9 +93,10 @@ public class EnvAirStationManagerIntegration extends IntegrationBase {
     }
 
     /**
-     * P1b 数据管道接线：① raw consumer 订阅 device.data.update（攒批落 asm_data_sample + 首见 seed）；
+     * 数据管道接线：① raw consumer 订阅 device.data.update（攒批落 asm_data_sample + 首见 seed）；
      * ② 启动预 seed（LogicDeviceManager 现存站房设备全集——设备存在性是运行时状态，启动后新建的
-     * 由 consumer 首见路补，两路同走 AsmSeedService）；③ stat 月分区启动 ensure；④ 三粒度调度器启动。
+     * 由 consumer 首见路补，两路同走 AsmSeedService）；③ stat 月分区启动 ensure；④ 三粒度调度器启动；
+     * ⑤ 报警链路（规则索引加载 + 评估 consumer + registry 重建 + 心跳 sweep）；⑥ 总览页 SSE consumer。
      *
      * <p>consumer 是 new 的（带 name/capacity 参数）；service/mapper 经 mry.getSpringBean 取 Spring 单例
      * （动态 jar 单例注册只认 @Service/@RestController，同 ADM 接线模式）。</p>
@@ -102,22 +121,39 @@ public class EnvAirStationManagerIntegration extends IntegrationBase {
         asmStatRefreshScheduler = mry.getSpringBean(AsmStatRefreshScheduler.class);
         asmStatRefreshScheduler.start();
 
-        // P3 报警链路：规则索引启动加载（坏行隔离在 index 内）+ 独立报警评估 consumer（与数据管道 SRP 分离）
-        com.ecat.integration.EnvAirStationManagerIntegration.rule.AsmAlarmRuleIndex alarmRuleIndex =
-                mry.getSpringBean(com.ecat.integration.EnvAirStationManagerIntegration.rule.AsmAlarmRuleIndex.class);
+        // 报警链路：规则索引启动加载（坏行隔离在 index 内）+ 独立报警评估 consumer（与数据管道 SRP 分离）
+        AsmAlarmRuleIndex alarmRuleIndex = mry.getSpringBean(AsmAlarmRuleIndex.class);
         alarmRuleIndex.reload();
-        asmAlarmRuleConsumer = new com.ecat.integration.EnvAirStationManagerIntegration.consumer.AsmAlarmRuleConsumer(
+        asmAlarmRuleConsumer = new AsmAlarmRuleConsumer(
                 "asm-alarm-rule", CONSUMER_CAPACITY, SAMPLE_BATCH_SIZE, SAMPLE_FLUSH_INTERVAL_MS,
                 core.getDeviceRegistry(),
-                mry.getSpringBean(com.ecat.integration.EnvAirStationManagerIntegration.rule.AsmAlarmRuleEvaluator.class),
-                mry.getSpringBean(com.ecat.integration.EnvAirStationManagerIntegration.mapper.AsmAlarmRecordMapper.class),
+                mry.getSpringBean(AsmAlarmRuleEvaluator.class),
+                mry.getSpringBean(AsmAlarmLifecycleService.class),
                 alarmRuleIndex,
-                mry.getSpringBean(com.ecat.integration.EnvAirStationManagerIntegration.service.AsmControlService.class));
+                mry.getSpringBean(AsmControlService.class));
         subscribeAsm(topic, asmAlarmRuleConsumer);
+
+        // 报警心跳窗生命周期：registry 从 DB ACTIVE 行重建（治重启孤儿徽章）+ 1min sweep 闭单摘槽
+        AsmAlarmRegistry alarmRegistry = mry.getSpringBean(AsmAlarmRegistry.class);
+        alarmRegistry.rebuildFromActive(
+                mry.getSpringBean(AsmAlarmRecordMapper.class).selectAllActive());
+        asmAlarmSweepScheduler = mry.getSpringBean(AsmAlarmSweepScheduler.class);
+        asmAlarmSweepScheduler.start();
+
+        // 总览页 SSE：站房 logic attr 事件 → AsmSseEvent（displayName/单位符号/状态中文）→ broadcaster
+        // 推 /asm-monitor/stream 长连接（@Service 广播器经 getSpringBean 取，ObjectMapper 自拥同 ADM）
+        asmSseConsumer = new AsmSseConsumer(
+                "asm-sse", CONSUMER_CAPACITY, core.getDeviceRegistry(),
+                mry.getSpringBean(AsmSseBroadcaster.class),
+                new ObjectMapper(),
+                mry.getSpringBean(AsmUnitContract.class),
+                alarmRegistry);
+        subscribeAsm(topic, asmSseConsumer);
 
         log.info("[诊断调试] ASM 数据管道已接线：asm-data-sample consumer 订阅 {}，启动预 seed {} series，"
                 + "stat 月分区已 ensure，三粒度物化调度器已启动，报警规则索引已加载 + asm-alarm-rule consumer 已订阅"
-                + "（P4：type=8 等联动经 AsmControlService 审计收口）",
+                + "，asm-sse consumer 已订阅（总览页 SSE 实时推送）"
+                + "（type=8 等联动经 AsmControlService 审计收口）",
                 topic, seeded);
     }
 
@@ -147,7 +183,7 @@ public class EnvAirStationManagerIntegration extends IntegrationBase {
         log.info("Releasing {} integration", getName());
     }
 
-    /** 反向收口：shutdown raw consumer（drain 残留批）与物化调度器（关线程池）；幂等（null 守卫）。 */
+    /** 反向收口：shutdown 各 consumer（drain 残留批）与调度器（关线程池）；幂等（null 守卫）。 */
     private void shutdownPipeline() {
         if (asmDataSampleConsumer != null) {
             asmDataSampleConsumer.shutdown();
@@ -161,10 +197,18 @@ public class EnvAirStationManagerIntegration extends IntegrationBase {
             asmAlarmRuleConsumer.shutdown();
             asmAlarmRuleConsumer = null;
         }
+        if (asmSseConsumer != null) {
+            asmSseConsumer.shutdown();
+            asmSseConsumer = null;
+        }
+        if (asmAlarmSweepScheduler != null) {
+            asmAlarmSweepScheduler.shutdown();
+            asmAlarmSweepScheduler = null;
+        }
     }
 
     /**
-     * P2 对外 SDK 出口（api 包稳定契约）。进程内取用（不经 Spring bean 语义，消费方 maven 依赖
+     * 对外 SDK 出口（api 包稳定契约）。进程内取用（不经 Spring bean 语义，消费方 maven 依赖
      * ASM jar provided 只 import api 包）：
      * <pre>{@code
      * AirStationSdk sdk = ((EnvAirStationManagerIntegration) core.getIntegrationRegistry()
@@ -173,7 +217,7 @@ public class EnvAirStationManagerIntegration extends IntegrationBase {
      * 实现是动态 jar Spring 单例（@Service），经 ruoyi 桥接 getSpringBean 按调用时取——onStart 装载
      * 后即就绪，调用于装载前（生命周期外）抛 NoSuchBeanDefinition 由调用方暴露。
      */
-    public com.ecat.integration.EnvAirStationManagerIntegration.api.AirStationSdk getAirStationSdk() {
-        return mry.getSpringBean(com.ecat.integration.EnvAirStationManagerIntegration.service.AirStationSdkImpl.class);
+    public AirStationSdk getAirStationSdk() {
+        return mry.getSpringBean(AirStationSdkImpl.class);
     }
 }

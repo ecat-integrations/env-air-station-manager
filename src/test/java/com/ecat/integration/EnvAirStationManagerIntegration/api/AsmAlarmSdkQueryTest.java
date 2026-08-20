@@ -56,7 +56,7 @@ class AsmAlarmSdkQueryTest {
                 .logicDeviceUniqueId("logicdevice_station.security_alarm").attrId("water_leak")
                 .severity("1").startTime(START).endTime(END).description("d").status("0")
                 .resultContent("{\"value\":\"报警\"}").build();
-        when(recordMapper.selectList("logicdevice_station.security_alarm", START, END, 500))
+        when(recordMapper.selectList("logicdevice_station.security_alarm", null, START, END, 500))
                 .thenReturn(Collections.singletonList(row));
 
         List<SdkAlarmRecord> out = sdk.queryAlarmRecords("logicdevice_station.security_alarm", START, END, 500);
@@ -74,7 +74,7 @@ class AsmAlarmSdkQueryTest {
 
     @Test
     void query_nullDeviceAllowed_meansAllDevices() {
-        when(recordMapper.selectList(isNull(String.class), any(Instant.class), any(Instant.class), anyInt()))
+        when(recordMapper.selectList(isNull(String.class), isNull(String.class), any(Instant.class), any(Instant.class), anyInt()))
                 .thenReturn(Collections.emptyList());
         assertEquals(0, sdk.queryAlarmRecords(null, START, END, 10).size());
     }

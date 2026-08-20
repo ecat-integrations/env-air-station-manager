@@ -62,7 +62,7 @@ public class AsmUnitContract {
      *
      * <p>语义（与 ADM resolveDisplay + DisplayUnitConverter 同构）：</p>
      * <ol>
-     *   <li><b>STORAGE / null purpose 严格抛</b>——STORAGE 是物化用途，掺读出口是调用错误；</li>
+     *   <li><b>STORAGE / null purpose 严格抛</b>——STORAGE 是物化用途，掺读出口是调用错误（STANDARD=标准展示 / MONITOR=自定义展示 / HISTORY=历史自定义均合法）；</li>
      *   <li><b>缺行 → 显原生</b>：uid 无该 purpose 行（或行 unit 为空=无量纲）时值 + 源单位原样返
      *       （native 保底是设计语义非兜底）；</li>
      *   <li><b>换算</b>：源/目标同类（同 UnitInfo 枚举类）经 core {@code UnitInfo.convertUnit} 比率链
@@ -72,7 +72,7 @@ public class AsmUnitContract {
      *       读路径不因脏单位配置 500（与写侧严格不对称，同 ADM 口径）。</li>
      * </ol>
      *
-     * @param purpose       读出口用途（MONITOR/HISTORY；STORAGE/null 抛）
+     * @param purpose       读出口用途（STANDARD/MONITOR/HISTORY；STORAGE/null 抛）
      * @param uid           站房逻辑设备 uniqueId
      * @param attrId        logic attr id
      * @param value         待换算数值（null → 原样 null 返，调用方渲染空）
@@ -84,11 +84,11 @@ public class AsmUnitContract {
     public AsmDisplayValue resolveDisplay(AsmUnitPurpose purpose, String uid, String attrId,
                                           Double value, String sourceUnitKey) {
         if (purpose == null) {
-            throw new IllegalArgumentException("purpose 不能为 null（读出口只允许 MONITOR/HISTORY）");
+            throw new IllegalArgumentException("purpose 不能为 null（读出口只允许 STANDARD/MONITOR/HISTORY）");
         }
         if (purpose == AsmUnitPurpose.STORAGE) {
             throw new IllegalArgumentException(
-                    "STORAGE 是物化用途，读出口只允许 MONITOR/HISTORY（uid=" + uid + " attrId=" + attrId + "）");
+                    "STORAGE 是物化用途，读出口只允许 STANDARD/MONITOR/HISTORY（uid=" + uid + " attrId=" + attrId + "）");
         }
         if (value == null) {
             return AsmDisplayValue.of(null, sourceUnitKey, false);
@@ -116,6 +116,27 @@ public class AsmUnitContract {
             return AsmDisplayValue.of(value, sourceUnitKey, false);
         }
         return AsmDisplayValue.of(value * ratio, targetKey, true);
+    }
+
+    /**
+     * 单位 full key → 展示符号（总览页精修定案 4：出口不再输出 getFullUnitString 全串）。
+     *
+     * <p>如 {@code temperature.celsius} → {@code °C}、{@code voltage.volt} → {@code V}。
+     * 解码失败（枚举重命名残留脏 key）→ 原样返 key（可见而非吞掉，读侧容错与 decodeLenient 同口径）。</p>
+     *
+     * @param fullKey 单位 full key（null/空 → null）
+     * @return 单位符号；null=无量纲
+     */
+    public static String unitSymbol(String fullKey) {
+        if (fullKey == null || fullKey.trim().isEmpty()) {
+            return null;
+        }
+        try {
+            UnitInfo unit = UnitInfoFactory.getEnum(fullKey);
+            return unit != null ? unit.getName() : fullKey;
+        } catch (IllegalArgumentException e) {
+            return fullKey;
+        }
     }
 
     /** 宽松解码（读侧容错）：null/空串/非法 key → null（调用方直通显原生）+ warn。 */

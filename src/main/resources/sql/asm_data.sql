@@ -187,16 +187,18 @@ CREATE TABLE asm_alarm_record (
     logic_device_unique_id   varchar(128) NOT NULL,
     attr_id                  varchar(64)  NOT NULL,
     severity                 varchar(2)   NOT NULL,  -- 来自规则配置（修复点4，不固定 "0"）
-    start_time               timestamptz  NOT NULL,  -- 持续类首超限时刻/事件时刻
-    end_time                 timestamptz  NOT NULL,  -- 触发/恢复时刻（查询窗锚点）
+    start_time               timestamptz  NOT NULL,  -- 持续类首超限时刻/事件时刻（episode 首触发）
+    end_time                 timestamptz,             -- 闭单时刻（sweep 过窗/断电恢复）；ACTIVE 行为 null
     description              text,
-    status                   varchar(2)   NOT NULL DEFAULT '0',
+    status                   varchar(8)   NOT NULL DEFAULT 'ACTIVE',  -- 生命周期态：ACTIVE/INACTIVE
+    last_breach_time         timestamptz,             -- 最近命中续期时刻（心跳窗锚点，sweep 判闭依据）
     result_content           text,                   -- 机读明细 JSON（value/threshold/kind）
     created_at               timestamptz  NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_asm_alarm_record_window ON asm_alarm_record (end_time DESC);
 CREATE INDEX IF NOT EXISTS idx_asm_alarm_record_device ON asm_alarm_record (logic_device_unique_id, end_time DESC);
-COMMENT ON TABLE asm_alarm_record IS 'ASM 报警记录;断电恢复类含恢复记录(end_time=恢复时刻,description 含恢复语义);同 (uid,attr,alarm_type) 5 分钟窗口内存去重';
+CREATE INDEX IF NOT EXISTS idx_asm_alarm_record_active ON asm_alarm_record (status, last_breach_time);
+COMMENT ON TABLE asm_alarm_record IS 'ASM 报警记录(心跳窗生命周期,镜像 adm_alarm):身份(uid,attr,alarm_type);ACTIVE 行 start_time=首触发/end_time=null/last_breach_time=每次命中续期;窗口内再触发只续期不落新行;1min sweep 过窗闭单 INACTIVE+end_time=now;断电恢复落终态恢复行并同闭 ACTIVE 行';
 
 -- ===== P3 规则 seed（动环域语义；airdevice 分析仪域规则不移植）=====
 INSERT INTO asm_alarm_rule (alarm_type, severity, setting_content, sort) VALUES

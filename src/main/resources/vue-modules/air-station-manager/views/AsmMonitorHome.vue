@@ -1,97 +1,377 @@
 <template>
   <!--
-    站房设备总览（路由 name=monitor）：轮询 GET /asm-monitor/snapshot 渲染每台站房逻辑设备的
-    全属性当前态卡片（live 优先/raw 回放兜，source 徽标区分）。本阶段不做 SSE，30s 轮询。
+    站房设备总览（路由 name=monitor）：分组瓦片墙 + 详情抽屉。
+    数据流：onMounted 拉 GET /asm-monitor/snapshot?unit=standard|custom 全量初始化（右上角显示单位切换，镜像 ADM）→ SSE /asm-monitor/stream
+    （device.data.update 具名帧）per-attr 增量 patch 瓦片与抽屉；断连显示重连横幅（客户端自管指数退避）。
+    无来源（LIVE/RAW）列、无完整时间戳（抽屉内仅相对时间）；单位为后端符号化后的符号（°C/V）。
   -->
   <div class="asm-page">
     <div class="asm-toolbar">
       <span class="asm-title">站房设备总览</span>
-      <span class="asm-hint">每 30 秒自动刷新；LIVE=总线实时态，RAW=最新采样回放</span>
+      <span class="asm-hint">{{ sseConnected ? 'SSE 实时推送中' : '等待实时连接…' }}</span>
       <button class="asm-btn" :disabled="loading" @click="load">手动刷新</button>
+      <!-- 单位双模式切换（镜像 ADM AdmUnitSwitcher）：standard=STANDARD 行标准口径 / custom=MONITOR 偏好；
+           切换即重拉 snapshot（后端按 unit 换算，前端零换算），选择存 localStorage 刷新恢复 -->
+      <span class="asm-unit-switcher">
+        <span class="asm-unit-label">显示单位:</span>
+        <button v-for="opt in UNIT_OPTIONS" :key="opt.value" type="button"
+                class="asm-unit-btn" :class="{ active: unitMode === opt.value }"
+                @click="onUnitPick(opt.value)">{{ opt.label }}</button>
+      </span>
     </div>
 
-    <div v-loading="loading" class="asm-cards">
+    <div v-if="sseFailed" class="asm-banner">连接断开，重连中…</div>
+
+    <!-- 状态筛选 chips（sticky 于瓦片墙上方）：计数 computed 派生，SSE patch 改设备 online/alarm 后计数自然响应 -->
+    <div class="asm-chips">
+      <button v-for="c in chips" :key="c.key" type="button" class="asm-chip"
+              :class="[c.key, { active: filterStatus === c.key }]" @click="filterStatus = c.key">
+        {{ c.label }}({{ c.count }})
+      </button>
+    </div>
+
+    <div v-loading="loading" class="asm-groups">
       <div v-if="!loading && !devices.length" class="asm-empty">暂无站房设备（未创建或未绑定 logicdevice_station 设备）</div>
-      <div v-for="d in devices" :key="d.logicDeviceUniqueId" class="asm-card">
-        <div class="asm-card-head">
-          <span class="asm-card-title">{{ d.logicDeviceUniqueId }}</span>
-          <span class="asm-badge">{{ d.attrs.length }} 参数</span>
+
+      <div v-for="g in groups" :key="g.key" class="asm-group">
+        <div class="asm-group-head">
+          <span class="asm-group-name">{{ g.name }}</span>
+          <span class="asm-group-count">{{ g.devices.length }}</span>
+        </div>
+        <div class="asm-tiles">
+          <div v-for="d in g.devices" :key="d.logicDeviceUniqueId" class="asm-tile" @click="openDrawer(d)">
+            <div class="asm-tile-head">
+              <span class="asm-tile-name">{{ d.displayName || d.logicDeviceUniqueId }}</span>
+              <!-- 圆点三色：红=报警（deviceAlarmBadges 并集非空，ADM cardUnionStatuses 同构）> 灰=离线 > 绿=在线；
+                   报警态经 SSE 帧只覆 attr 级字段与 episode 侧标志，结构性杜绝「帧 alarm=false 覆盖 snapshot 报警态」 -->
+              <span class="asm-dot" :class="dotClass(d)" />
+              <span v-if="!d.online" class="asm-offline-text">{{ offlineText(d) }}</span>
+            </div>
+            <div v-for="p in coreParams(d)" :key="p.attrId" class="asm-tile-param">
+              <span class="asm-param-name">{{ p.displayName || p.attrId }}</span>
+              <span class="asm-param-value">{{ attrValue(p) }}<small v-if="p.unit" class="asm-unit">{{ p.unit }}</small></span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <el-drawer v-model="drawerVisible" :title="drawerDevice ? (drawerDevice.displayName || drawerDevice.logicDeviceUniqueId) : ''" size="480px">
+      <div v-if="drawerDevice" class="asm-drawer-body">
+        <div class="asm-drawer-meta">
+          <span class="asm-dot" :class="dotClass(drawerDevice)" />
+          <span v-if="drawerDevice.online">在线</span>
+          <span v-else class="asm-offline-text">离线 {{ offlineText(drawerDevice) }}</span>
+        </div>
+        <!-- 设备级状态条：仅在有报警或离线时出现（在线且无报警时隐藏，保持抽屉简洁）；
+             报警徽章并集复用 deviceAlarmBadges，按档 tier-danger/tier-warning 渲染 -->
+        <div v-if="deviceAlarmBadges(drawerDevice).length || !drawerDevice.online" class="asm-drawer-statusbar">
+          <span v-for="b in deviceAlarmBadges(drawerDevice)" :key="b.text" class="asm-badge" :class="'tier-' + b.tier">{{ b.text }}</span>
+          <span v-if="!drawerDevice.online" class="asm-offline-text">离线 {{ offlineText(drawerDevice) }}</span>
         </div>
         <table class="asm-table">
           <thead>
-            <tr><th>参数</th><th>当前值</th><th>单位</th><th>更新时间</th><th>来源</th></tr>
+            <tr><th>参数</th><th>当前值</th><th>状态</th><th>更新</th></tr>
           </thead>
           <tbody>
-            <tr v-for="a in d.attrs" :key="a.attrId">
-              <td>{{ a.attrId }}</td>
-              <td>{{ displayValue(a) }}</td>
-              <td>{{ a.unit || '-' }}</td>
-              <td>{{ formatLocalDateTime(a.updateTime) }}</td>
-              <td><span class="asm-badge" :class="a.source === 'LIVE' ? 'ok' : 'raw'">{{ a.source }}</span></td>
+            <tr v-for="a in drawerAttrs" :key="a.attrId">
+              <td>{{ a.displayName || a.attrId }}</td>
+              <td :style="{ color: statusColor(a.status) }">{{ attrValue(a) }}<small v-if="a.unit" class="asm-unit">{{ a.unit }}</small></td>
+              <td><span v-if="a.statusName" class="asm-badge" :class="'tier-' + statusTier(a.status)">{{ a.statusName }}</span><span v-else class="asm-muted">-</span></td>
+              <td class="asm-muted">{{ relativeTime(a.updateTime) }}</td>
             </tr>
-            <tr v-if="!d.attrs.length"><td colspan="5" class="asm-empty">该设备暂无属性数据</td></tr>
+            <tr v-if="!drawerDevice.attrs.length"><td colspan="4" class="asm-empty">该设备暂无属性数据</td></tr>
           </tbody>
         </table>
       </div>
-    </div>
+    </el-drawer>
   </div>
 </template>
 
 <script>
 // keep-alive 契约：Options API 组件 name 必须等于路由 name（monitor），宿主 keep-alive 按组件名匹配缓存。
-
 import { getSnapshot } from '@/api/asm'
-import { formatLocalDateTime } from '@/utils/datetime'
+import { DEVICE_GROUPS, catalogOf } from '@/utils/deviceCatalog'
+import { AsmMonitorSseClient } from '../sse/AsmMonitorSseClient'
+import { statusTier, statusColor } from '../utils/statusBadge'
 
-const POLL_MS = 30000
+// 单位模式恢复（对齐 ADM loadUnit）：非 standard/custom 值重置 standard（不映射旧值）；隐私模式默认 standard。
+function loadUnitMode() {
+  try {
+    const v = localStorage.getItem('asm-monitor-unit')
+    return (v === 'standard' || v === 'custom') ? v : 'standard'
+  } catch (e) {
+    return 'standard'
+  }
+}
+
+// 中文拼音比较（与后端 Collator zh 同口径；Chromium Intl 支持 zh-Hans-CN 拼音 collation）
+function pinyinCompare(a, b) {
+  return String(a).localeCompare(String(b), 'zh-Hans-CN')
+}
 
 export default {
   name: 'monitor',
   data() {
-    return { devices: [], loading: false, timer: null }
+    return {
+      devices: [],
+      loading: false,
+      // 单位模式（standard/custom，对齐 ADM）：localStorage 恢复上次选择，首次默认 standard
+      unitMode: loadUnitMode(),
+      UNIT_OPTIONS: [
+        { value: 'standard', label: '标准' },
+        { value: 'custom', label: '自定义' },
+      ],
+      drawerVisible: false,
+      drawerUid: null,
+      // 瓦片墙状态筛选：all=全部 / offline=离线(!online) / alarm=报警(deviceAlarmBadges 并集非空)
+      filterStatus: 'all',
+      sseConnected: false,
+      sseFailed: false,
+      sseClient: null,
+      // 相对时间/离线时长唯一时钟（1s tick 驱动「N秒前」秒级平滑递增；SSE patch 只改数据行，
+      // 时间文本仅随本 tick 重算——避免 SSE 帧与粗粒度 tick 双源触发导致的非线性跳变）
+      nowMs: Date.now(),
+      nowTimer: null,
+    }
+  },
+  computed: {
+    // 筛选 chips：计数 computed 派生（离线=!online / 报警=deviceAlarmBadges 并集非空），SSE patch 后自然响应
+    chips() {
+      return [
+        { key: 'all', label: '全部', count: this.devices.length },
+        { key: 'offline', label: '离线', count: this.devices.filter(d => !d.online).length },
+        { key: 'alarm', label: '报警', count: this.devices.filter(d => this.deviceAlarmBadges(d).length).length },
+      ]
+    },
+    filteredDevices() {
+      if (this.filterStatus === 'offline') return this.devices.filter(d => !d.online)
+      if (this.filterStatus === 'alarm') return this.devices.filter(d => this.deviceAlarmBadges(d).length)
+      return this.devices
+    },
+    groups() {
+      // 组内瓦片按设备中文名拼音序（渲染序治理：后端 snapshot 迭代序=registry 顺序，安防组曾出现
+      // 「4智能视频监控系统」排在「1门禁」前；displayName null 回退 uid。纯前端渲染序，后端不动）
+      return DEVICE_GROUPS
+        .map(g => ({
+          ...g,
+          devices: this.filteredDevices
+            .filter(d => catalogOf(d.logicDeviceUniqueId).group === g.key)
+            .sort((a, b) => pinyinCompare(a.displayName || a.logicDeviceUniqueId, b.displayName || b.logicDeviceUniqueId)),
+        }))
+        .filter(g => g.devices.length)
+    },
+    drawerDevice() {
+      return this.devices.find(d => d.logicDeviceUniqueId === this.drawerUid) || null
+    },
+    // 抽屉行序（与后端 sortAttrRows 同 key 镜像，保 SSE patch 后不乱序）：分组序 状态类(0)→命令类(1)→数值类(2)
+    // （命令=attrId _command 结尾；数值=行有数值；状态=其余），组内 displayName 拼音序 + 「重置*」多音字例外
+    // （按 chóng 排组内最前，与后端 ATTR_ORDER 同口径）。瓦片核心参数按 catalog 顺序不受影响。
+    drawerAttrs() {
+      if (!this.drawerDevice) return []
+      const groupOf = a => {
+        if (a.attrGroup != null) return a.attrGroup   // snapshot 行自带后端分组键（DEF 行值缺席须后端供键）
+        return (a.attrId && a.attrId.endsWith('_command')) ? 1 : (typeof a.value === 'number' ? 2 : 0)
+      }
+      return [...this.drawerDevice.attrs].sort((a, b) => {
+        const ga = groupOf(a), gb = groupOf(b)
+        if (ga !== gb) return ga - gb
+        const na = (a.displayName || '').startsWith('重置')
+        const nb = (b.displayName || '').startsWith('重置')
+        if (na !== nb) return na ? -1 : 1
+        return pinyinCompare(a.displayName || a.attrId, b.displayName || b.attrId)
+      })
+    },
   },
   mounted() {
     this.load()
-    this.timer = setInterval(this.load, POLL_MS)
+    this.startSse()
+    this.nowTimer = setInterval(() => { this.nowMs = Date.now() }, 1000)
+  },
+  activated() {
+    // keep-alive 重入：SSE 可能已被 deactivated 停掉，重开
+    if (!this.sseClient) this.startSse()
+  },
+  deactivated() {
+    this.stopSse()
   },
   beforeUnmount() {
-    if (this.timer) clearInterval(this.timer)
+    this.stopSse()
+    if (this.nowTimer) clearInterval(this.nowTimer)
   },
   methods: {
-    formatLocalDateTime,
-    displayValue(a) {
-      if (a.valueText != null && a.valueText !== '') return a.valueText
-      return a.value == null ? '-' : a.value
-    },
     async load() {
       this.loading = true
       try {
-        const res = await getSnapshot()
+        const res = await getSnapshot(this.unitMode === 'custom' ? 'custom' : undefined)
         this.devices = (res && res.data) || []
       } finally {
         this.loading = false
       }
     },
+    // 单位切换：同值不重拉；写 localStorage（try-catch 防隐私模式）后重拉 snapshot（后端按 unit 换算）
+    onUnitPick(value) {
+      if (value === this.unitMode) return
+      this.unitMode = value
+      try { localStorage.setItem('asm-monitor-unit', value) } catch (e) { /* 隐私模式降级内存态 */ }
+      this.load()
+    },
+    startSse() {
+      this.sseClient = new AsmMonitorSseClient({
+        onUpdate: payload => this.handleSseUpdate(payload),
+        onOpen: () => { this.sseConnected = true; this.sseFailed = false },
+        onError: () => { this.sseFailed = true },
+      })
+      this.sseClient.start()
+    },
+    stopSse() {
+      if (this.sseClient) {
+        this.sseClient.stop()
+        this.sseClient = null
+      }
+      this.sseConnected = false
+    },
+    // SSE 增量 patch：一帧 = 一个设备一个 attr 新值，按 (uid, attrId) 原地替换；attr 新增则 push（SSE 帧
+    // 可能先于 snapshot 返回到达）。事件到达即设备活性在线（60s 窗内必然满足）。
+    // window.__asmSseFrames 计数器供 e2e 断言「收到 ≥1 帧 device.data.update」（网络面板外的确定性证据）。
+    handleSseUpdate(payload) {
+      if (typeof window !== 'undefined') {
+        window.__asmSseFrames = (window.__asmSseFrames || 0) + 1
+      }
+      const device = this.devices.find(d => d.logicDeviceUniqueId === payload.logicDeviceUniqueId)
+      if (!device) return
+      // 双值同推（同 ADM 监控页方案）：standard 模式取 standardValue/standardUnit，custom 取 displayValue/unit；
+      // 单位模式切换后 snapshot 已同口径重拉，本 patch 与当前模式一致
+      const isStandard = this.unitMode === 'standard'
+      const row = {
+        attrId: payload.attrId,
+        displayName: payload.displayName,
+        value: isStandard ? payload.standardValue : payload.displayValue,
+        valueText: payload.valueText,
+        unit: isStandard ? payload.standardUnit : payload.unit,
+        updateTime: payload.updateTime,
+        statusName: payload.statusName,
+        status: payload.status,
+      }
+      const idx = device.attrs.findIndex(a => a.attrId === payload.attrId)
+      if (idx >= 0) device.attrs.splice(idx, 1, row)
+      else device.attrs.push(row)  // 新 attr 追加尾部，抽屉经 drawerAttrs 拼音序 computed 重排不乱序
+      device.online = true
+      device.offlineMs = 0
+      // 规则 episode 侧实时维护（帧内 ruleAlarmActive）：驱动卡片徽章 episode 侧；attr 侧报警态随上面
+      // row.status patch 自然更新（deviceAlarmBadges 每次渲染对全 attr statuses 重求并集，单侧不再覆另一侧）
+      device.ruleAlarmActive = !!payload.ruleAlarmActive
+    },
+    // 卡片报警徽章并集（ADM cardUnionStatuses 同构）：① 全 attr statuses 中 danger 档（statusBadge ASM_STATUS_TIER）
+    // 按 statusName 去重 + ② episode 侧（activeAlarms 明细 ruleName 去重；snapshot 未见但 mid-session 新开的
+    // episode 由 SSE 帧 ruleAlarmActive=true 兜底显示「报警」）。空数组=无报警（chips 报警计数同源）。
+    deviceAlarmBadges(d) {
+      const out = []
+      const seen = new Set()
+      for (const a of (d.attrs || [])) {
+        if (statusTier(a.status) !== 'danger') continue
+        const text = a.statusName || a.status
+        if (!seen.has(text)) { seen.add(text); out.push({ tier: 'danger', text }) }
+      }
+      for (const alarm of (d.activeAlarms || [])) {
+        const text = alarm.ruleName || alarm.displayName || '报警'
+        if (!seen.has(text)) { seen.add(text); out.push({ tier: 'danger', text }) }
+      }
+      if (d.ruleAlarmActive && !(d.activeAlarms || []).length) {
+        out.push({ tier: 'danger', text: '报警' })   // 帧 ruleAlarmActive=true 但 activeAlarms 明细尚未对齐（滞后边界同 ADM）
+      }
+      return out
+    },
+    // 瓦片/抽屉圆点三色，优先级 红(报警) > 灰(离线) > 绿(在线)：报警并集非空即红（即使同时离线）
+    dotClass(d) {
+      if (this.deviceAlarmBadges(d).length) return 'alarm'
+      return d.online ? 'on' : 'off'
+    },
+    openDrawer(d) {
+      this.drawerUid = d.logicDeviceUniqueId
+      this.drawerVisible = true
+    },
+    // 瓦片核心参数行：按 catalog coreAttrs 顺序取 attrs 行；attr 缺数据时占位（不隐行，用户可感知缺参）
+    coreParams(d) {
+      const ids = catalogOf(d.logicDeviceUniqueId).coreAttrs
+      return ids.map(id => d.attrs.find(a => a.attrId === id) || { attrId: id, displayName: id })
+    },
+    attrValue(a) {
+      if (a.valueText != null && a.valueText !== '') return a.valueText
+      return a.value == null ? '-' : a.value
+    },
+    offlineText(d) {
+      if (d.offlineMs == null) return ''
+      if (d.offlineMs < 3600000) return `${Math.max(1, Math.floor(d.offlineMs / 60000))}分`
+      return `${(d.offlineMs / 3600000).toFixed(1)}小时`
+    },
+    relativeTime(updateTime) {
+      if (!updateTime) return '-'
+      const sec = Math.max(0, Math.floor((this.nowMs - new Date(updateTime).getTime()) / 1000))
+      if (sec < 60) return `${sec}秒前`
+      if (sec < 3600) return `${Math.floor(sec / 60)}分前`
+      return `${(sec / 3600).toFixed(1)}小时前`
+    },
+    statusTier,
+    statusColor,
   },
 }
 </script>
 
 <style scoped>
 .asm-page { padding: 12px; }
-.asm-toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.asm-toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
 .asm-title { font-size: 16px; font-weight: 600; }
 .asm-hint { color: #909399; font-size: 12px; }
 .asm-btn { padding: 4px 14px; border: 1px solid #dcdfe6; border-radius: 4px; background: #409eff; color: #fff; cursor: pointer; }
 .asm-btn:disabled { opacity: .6; }
-.asm-cards { min-height: 120px; }
-.asm-card { border: 1px solid #ebeef5; border-radius: 6px; margin-bottom: 16px; padding: 8px 12px; }
-.asm-card-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
-.asm-card-title { font-weight: 600; }
+.asm-unit-switcher { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; }
+.asm-unit-label { font-size: 13px; color: #909399; margin-right: 4px; }
+.asm-unit-btn { font-size: 13px; padding: 4px 12px; cursor: pointer; border: 1px solid #dcdfe6; background: #fff; color: #606266; border-radius: 4px; }
+.asm-unit-btn:first-of-type { border-radius: 4px 0 0 4px; }
+.asm-unit-btn:last-of-type { border-radius: 0 4px 4px 0; margin-left: -1px; }
+.asm-unit-btn.active { background: #409eff; color: #fff; border-color: #409eff; }
+.asm-banner { background: #fef0f0; color: #f56c6c; border: 1px solid #fbc4c4; border-radius: 4px; padding: 6px 12px; margin-bottom: 10px; font-size: 13px; }
+/* 状态筛选 chips：pill 徽章（element-plus 语义色）；激活态实心白字 */
+.asm-chips { position: sticky; top: 0; z-index: 5; display: flex; gap: 8px; padding: 6px 0; margin-bottom: 8px; background: inherit; }
+.asm-chip { font-size: 13px; padding: 2px 14px; border-radius: 14px; cursor: pointer; border: 1px solid #dcdfe6; background: #fff; color: #606266; }
+.asm-chip.offline { border-color: #e6a23c; color: #e6a23c; }
+.asm-chip.alarm { border-color: #f56c6c; color: #f56c6c; }
+.asm-chip.active { background: #409eff; border-color: #409eff; color: #fff; }
+.asm-chip.offline.active { background: #e6a23c; border-color: #e6a23c; color: #fff; }
+.asm-chip.alarm.active { background: #f56c6c; border-color: #f56c6c; color: #fff; }
+/* 报警徽标（瓦片头部 danger 三件套，ADM AdmStatusBadges danger 同款） */
+.asm-groups { min-height: 120px; }
+.asm-group { margin-bottom: 14px; }
+.asm-group-head { display: flex; align-items: center; gap: 8px; padding: 4px 8px; background: #f5f7fa; border-radius: 4px; margin-bottom: 6px; }
+.asm-group-name { font-weight: 600; color: #303133; font-size: 13px; }
+.asm-group-count { font-size: 12px; color: #909399; }
+.asm-tiles { display: flex; flex-wrap: wrap; gap: 8px; }
+.asm-tile { width: 216px; border: 1px solid #ebeef5; border-radius: 6px; padding: 6px 10px; cursor: pointer; background: #fff; }
+.asm-tile:hover { border-color: #409eff; }
+.asm-tile-head { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+.asm-tile-name { font-weight: 600; font-size: 13px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.asm-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.asm-dot.on { background: #67c23a; }
+.asm-dot.off { background: #c0c4cc; }
+.asm-dot.alarm { background: #f56c6c; }
+/* 抽屉设备级状态条：报警徽章并集 + 离线信息（在线且无报警时不渲染） */
+.asm-drawer-statusbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 8px; }
+.asm-offline-text { color: #f56c6c; font-size: 12px; }
+.asm-tile-param { display: flex; justify-content: space-between; font-size: 12px; line-height: 1.7; }
+.asm-param-name { color: #606266; }
+.asm-param-value { color: #303133; font-weight: 500; }
+.asm-unit { color: #909399; margin-left: 3px; font-size: 11px; }
 .asm-badge { font-size: 12px; padding: 1px 8px; border-radius: 10px; background: #f0f2f5; color: #606266; }
-.asm-badge.ok { background: #f0f9eb; color: #67c23a; }
-.asm-badge.raw { background: #fdf6ec; color: #e6a23c; }
+/* 抽屉状态徽章按枚举 key 档位配色（utils/statusBadge.js）：红=立即处置 / 橙=排查 / 绿=正常 / 灰=未知 */
+.asm-badge.tier-danger { background: #fef2f2; color: #f56c6c; }
+.asm-badge.tier-warning { background: #fdf6ec; color: #e6a23c; }
+.asm-badge.tier-success { background: #f0f9eb; color: #67c23a; }
+.asm-badge.tier-unknown { background: #f3f4f6; color: #909399; }
+.asm-muted { color: #c0c4cc; }
+.asm-empty { color: #909399; padding: 12px; text-align: center; }
+.asm-drawer-meta { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; font-size: 13px; color: #303133; }
 .asm-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .asm-table th, .asm-table td { border-bottom: 1px solid #ebeef5; padding: 6px 8px; text-align: left; }
 .asm-table th { background: #fafafa; color: #606266; }
-.asm-empty { color: #909399; padding: 12px; text-align: center; }
 </style>

@@ -81,6 +81,14 @@ class AsmConfigServiceTest {
     }
 
     @Test
+    void updateUnitPref_rejectsStandardPurpose() {
+        // STANDARD 是 seed 维护的标准口径行（standard 模式读出口），同 STORAGE 不开放用户写（对齐 ADM 配置域只写 MONITOR/HISTORY）
+        assertThrows(IllegalArgumentException.class,
+                () -> service.updateUnitPref("uid-1", "temperature", "STANDARD", "mg/m3", "admin"));
+        verifyNoInteractions(configUnitMapper);
+    }
+
+    @Test
     void updateUnitPref_rejectsUnknownPurpose() {
         assertThrows(IllegalArgumentException.class,
                 () -> service.updateUnitPref("uid-1", "temperature", "DISPLAY", "mg/m3", "admin"));
