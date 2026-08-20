@@ -31,6 +31,11 @@ public class AsmConfigUnit {
     private String purpose;
     /** 目标单位（getFullUnitString key 形式）；null=无量纲/显原生。 */
     private String unit;
+    /**
+     * 展示小数位（0-6；仅监控页瓦片/抽屉/SSE 修约用，历史页不动）。null=未配置（修约走 def
+     * displayPrecision → 默认 2 三级链）；PUT 不传 precision 时 upsert 不覆盖已有值（coalesce）。
+     */
+    private Integer displayPrecision;
     /** 行创建人（seed=ASM，人工改=用户名）。 */
     private String createdBy;
     /** 最近修改人。 */

@@ -8,6 +8,7 @@
         <result property="attrId"              column="attr_id"/>
         <result property="purpose"             column="purpose"/>
         <result property="unit"                column="unit"/>
+        <result property="displayPrecision"   column="display_precision"/>
         <result property="createdBy"           column="created_by"/>
         <result property="updatedBy"           column="updated_by"/>
         <result property="createdAt"           column="created_at" typeHandler="com.ecat.integration.EnvAirStationManagerIntegration.support.TimestamptzInstantTypeHandler"/>
@@ -15,7 +16,7 @@
     </resultMap>
 
     <sql id="cols">
-        logic_device_unique_id, attr_id, purpose, unit, created_by, updated_by, created_at, updated_at
+        logic_device_unique_id, attr_id, purpose, unit, display_precision, created_by, updated_by, created_at, updated_at
     </sql>
 
     <select id="selectByLogicDevice" resultMap="AsmConfigUnitResult">
@@ -33,11 +34,13 @@
     <!-- upsert：on conflict(uid, attr, purpose) do update 只覆盖 unit + 审计列（单位偏好是完整语义）。 -->
     <insert id="upsert" parameterType="com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmConfigUnit">
         insert into asm_config_unit
-            (logic_device_unique_id, attr_id, purpose, unit, created_by, updated_by, created_at, updated_at)
+            (logic_device_unique_id, attr_id, purpose, unit, display_precision, created_by, updated_by, created_at, updated_at)
         values
-            (#{logicDeviceUniqueId}, #{attrId}, #{purpose}, #{unit}, #{createdBy}, #{updatedBy}, now(), now())
+            (#{logicDeviceUniqueId}, #{attrId}, #{purpose}, #{unit}, #{displayPrecision}, #{createdBy}, #{updatedBy}, now(), now())
         on conflict (logic_device_unique_id, attr_id, purpose) do update set
             unit       = excluded.unit,
+            -- precision null=不覆盖已有值（PUT 只改单位不动小数位时保留原配置）
+            display_precision = coalesce(excluded.display_precision, asm_config_unit.display_precision),
             updated_by = excluded.updated_by,
             updated_at = now()
     </insert>
@@ -45,9 +48,9 @@
     <!-- insertIfAbsent：on conflict do nothing——已存在行（人工精化 unit）原样保留；seed 专用。 -->
     <insert id="insertIfAbsent" parameterType="com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmConfigUnit">
         insert into asm_config_unit
-            (logic_device_unique_id, attr_id, purpose, unit, created_by, updated_by, created_at, updated_at)
+            (logic_device_unique_id, attr_id, purpose, unit, display_precision, created_by, updated_by, created_at, updated_at)
         values
-            (#{logicDeviceUniqueId}, #{attrId}, #{purpose}, #{unit}, #{createdBy}, #{updatedBy}, now(), now())
+            (#{logicDeviceUniqueId}, #{attrId}, #{purpose}, #{unit}, #{displayPrecision}, #{createdBy}, #{updatedBy}, now(), now())
         on conflict (logic_device_unique_id, attr_id, purpose) do nothing
     </insert>
 </mapper>

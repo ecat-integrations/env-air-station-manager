@@ -99,6 +99,17 @@ export function executeControl(body) {
 }
 
 /**
+ * 按主键单查控制记录（GET /asm-monitor/control/{id}）。
+ * 仅设计用途=SSE 重连补偿单查（重连成功后对在途 PENDING 项一次性按 id 对齐终态，
+ * 生命周期事件触发非轮询通道，设计 §4.4）。
+ * @param {number|string} id asm_control_record 主键
+ * @returns {Promise} res.data = AsmControlRecord
+ */
+export function getControlById(id) {
+  return request({ url: '/asm-monitor/control/' + id, method: 'get' })
+}
+
+/**
  * 控制记录分页（GET /asm-monitor/control-record/list）。
  * @param {object} q { start, end, uid?, origin?:'REMOTE'|'LOCAL', result?:'PENDING'|'SUCCESS'|'FAILED'|'TIMEOUT', pageNum, pageSize }
  * @returns {Promise} res.data = { total, rows:[AsmControlRecord] }
@@ -148,7 +159,8 @@ export function getConfigUnit() {
 
 /**
  * 写单条单位偏好（PUT /asm-monitor/config-unit，后端写后失效单位缓存即时生效）。
- * @param {object} body { logicDeviceUniqueId, attrId, purpose:'MONITOR'|'HISTORY', unit }
+ * @param {object} body { logicDeviceUniqueId, attrId, purpose:'MONITOR'|'HISTORY', unit, displayPrecision }
+ *   displayPrecision 0-6 可空；空=本次不改小数位（后端 upsert coalesce 不覆盖）
  */
 export function putConfigUnit(body) {
   return request({ url: '/asm-monitor/config-unit', method: 'put', data: body })

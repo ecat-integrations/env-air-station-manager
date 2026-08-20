@@ -230,12 +230,18 @@ public class AsmSnapshotService {
         Object value = state.getValue();
         AttributeStatus status = state.getStatus();
         if (value instanceof Number) {
+            String sourceKey = unitKey(state.getNativeUnit());
             AsmDisplayValue display = unitContract.resolveDisplay(purpose,
-                    uid, attrId, ((Number) value).doubleValue(), unitKey(state.getNativeUnit()));
+                    uid, attrId, ((Number) value).doubleValue(), sourceKey);
             return AsmSnapshotAttrDto.builder()
                     .attrId(attrId).displayName(name)
-                    .value(AsmDisplayRounder.round(display.getValue(), displayPrecision(def)))
+                    .value(AsmDisplayRounder.round(display.getValue(),
+                            monitorPrecision(uid, attrId, def)))
                     .unit(AsmUnitContract.unitSymbol(display.getUnit()))
+                    .unitKey(display.getUnit())
+                    .displayPrecision(AsmDisplayRounder.resolvePrecision(
+                            unitContract.monitorDisplayPrecision(uid, attrId), displayPrecision(def)))
+                    .unitOptions(AsmUnitOptionCatalog.groupsFor(sourceKey))
                     .updateTime(state.getLastUpdated())
                     .statusName(status != null ? status.getDescription() : null)
                     .status(status != null ? status.name() : null)
@@ -261,8 +267,13 @@ public class AsmSnapshotService {
                     uid, sample.getAttrId(), sample.getValueNum().doubleValue(), sample.getUnit());
             return AsmSnapshotAttrDto.builder()
                     .attrId(sample.getAttrId()).displayName(name)
-                    .value(AsmDisplayRounder.round(display.getValue(), displayPrecision(def)))
+                    .value(AsmDisplayRounder.round(display.getValue(),
+                            monitorPrecision(uid, sample.getAttrId(), def)))
                     .unit(AsmUnitContract.unitSymbol(display.getUnit()))
+                    .unitKey(display.getUnit())
+                    .displayPrecision(AsmDisplayRounder.resolvePrecision(
+                            unitContract.monitorDisplayPrecision(uid, sample.getAttrId()), displayPrecision(def)))
+                    .unitOptions(AsmUnitOptionCatalog.groupsFor(sample.getUnit()))
                     .updateTime(sample.getDataTime()).source(SOURCE_RAW)
                     .attrGroup(attrGroup(sample.getAttrId(), def))
                     .build();
@@ -304,6 +315,12 @@ public class AsmSnapshotService {
     /** 展示精度：def displayPrecision，缺席/非法走默认（AsmDisplayRounder 兜）。 */
     private static Integer displayPrecision(LogicAttributeDefine def) {
         return def != null ? def.getDisplayPrecision() : null;
+    }
+
+    /** 监控页修约精度三级链：MONITOR 行 display_precision → def displayPrecision → 默认 2。 */
+    private Integer monitorPrecision(String uid, String attrId, LogicAttributeDefine def) {
+        return AsmDisplayRounder.resolvePrecision(
+                unitContract.monitorDisplayPrecision(uid, attrId), displayPrecision(def));
     }
 
     /**

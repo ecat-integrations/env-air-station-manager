@@ -35,4 +35,27 @@ class AsmDisplayRounderTest {
         assertEquals(25.6, AsmDisplayRounder.round(25.555d, 1));
         assertEquals(25.0, AsmDisplayRounder.round(25.4d, 0));
     }
+
+    // ===== 监控页修约精度三级链：MONITOR 行 display_precision → def displayPrecision → 默认 2 =====
+
+    @Test
+    void resolvePrecision_configOverridesDef() {
+        assertEquals(Integer.valueOf(3), AsmDisplayRounder.resolvePrecision(3, 1));
+    }
+
+    @Test
+    void resolvePrecision_defCoversDefaultWhenConfigAbsent() {
+        assertEquals(Integer.valueOf(1), AsmDisplayRounder.resolvePrecision(null, 1));
+    }
+
+    @Test
+    void resolvePrecision_bothAbsentFallsToDefault2() {
+        assertEquals(Integer.valueOf(2), AsmDisplayRounder.resolvePrecision(null, null));
+    }
+
+    @Test
+    void resolvePrecision_illegalValuesTreatedAsAbsent() {
+        assertEquals(Integer.valueOf(1), AsmDisplayRounder.resolvePrecision(-1, 1));
+        assertEquals(Integer.valueOf(2), AsmDisplayRounder.resolvePrecision(null, -5));
+    }
 }

@@ -11,16 +11,26 @@
 | 历史查询 | REST 按粒度/mode/参数/时间窗查询 + 单位偏好出口（换算，缺行显原生） |
 | 动环报警 | seed 规则（温湿度/供电/漏水/门禁/标气泄漏等），range+持续 / 瞬时阈值 / 状态串三类判定，热加载、报警联动（如泄漏→开排风扇） |
 | 控制审计 | 统一控制收口（REST=REMOTE / SDK=LOCAL 双入口），`asm_control_record` 记录调用方、执行前后值、终态（PENDING→SUCCESS/FAILED/TIMEOUT） |
+| 设备控制页 | 总览抽屉入口 → `device_control`：DM 配置驱动的 7 台可控设备 card 墙，批量确认/撤销 + 串行逐 attr 提交，终态 SSE 流式回显（无轮询） |
 | 对外 SDK | `AirStationSdk`（api 包零依赖），其他集成进程内取用查询/报警/控制能力 |
 
 ## 总览页（monitor）
 
 - **分组瓦片墙**：7 组 22 类设备，组内按设备名拼音序；瓦片头圆点三色 = 🔴 报警 > ⚫ 离线 > 🟢 在线；筛选 chips（全部/离线/报警 计数实时）。
 - **SSE 实时推送**：`/asm-monitor/stream` 具名帧 `device.data.update` 增量 patch 瓦片/抽屉（fetch-event-source，`?token=` 鉴权，5s 心跳），无轮询。
-- **单位双模式**：右上「标准/自定义」切换——standard 读 `asm_config_unit` STANDARD 行（seed 默认=原生单位），custom 读 MONITOR 偏好行；SSE 帧双值同推，切换零延迟。
+- **单位双模式**：右上「默认/自定义」切换（显示文字 2026-08-20 起「标准」→「默认」，localStorage 存值 `standard`/`custom` 不动、老用户已存选择直接恢复）——standard 读 `asm_config_unit` STANDARD 行（seed 默认=原生单位），custom 读 MONITOR 偏好行；SSE 帧双值同推，切换零延迟。
+- **单位设置抽屉**（⚙ 单位设置，2026-08-20）：编辑选中设备 MONITOR（自定义）行——设备下拉按 catalog 分组全中文名、参数行（中文参数名|当前值|单位下拉|小数位 0-6）仅数值类可编辑；单位候选 = 同类全部单位 + 气态跨类（mg/m³↔ppm，snapshot 行 `unitOptions` 按类分组、同类组在前，跨类不可换算目标按现有语义显原生）；小数位只作用于监控页（瓦片/抽屉/SSE），修约三级链 = MONITOR 行 `display_precision` → def displayPrecision → 默认 2，历史页不动；保存逐行 PUT config-unit（displayPrecision 空=不覆盖已有值），后端缓存已失效即时生效。「默认」模式读 STANDARD 行不受影响。
 - **卡片报警计算**（同 ADM）：设备级报警 = 全 attr 状态 danger 档并集 ∪ 规则 episode；无设备级布尔，SSE 逐 attr patch 天然实时。attr 行带 `status` 枚举 key（非中文文案），前端按枚举映射配色。
 - **详情抽屉**：顶部设备状态条（报警徽章并集+规则名+离线信息）；参数行分组序 = 状态类 → 命令类(`*_command`) → 数值类，组内拼音（「重置」按 chóng 排命令组首），行状态徽章按 danger/warning/success 档配色；数值出口 HALF_EVEN 修约（默认 2 位小数）。
 - **在线判定**：`AsmOnlineJudge`——online_status attr 优先，兜底取**最新**参数时间戳（任一参数 60s 内更新=在线）。
+- **设备控制入口**：详情抽屉顶部状态行「设备控制」按钮——显隐唯一判定源 = 前端常量 `control/constants.js` 的 `CONTROLLABLE_TYPES`（空调/灯光/排风扇/门禁/采样管/稳压电源 6 类型；增删受控类型改常量，须与 DM `env_device_settings` 配置保持同步）。
+
+## 设备控制页（device_control，2026-08-20）
+
+- **范围**：DM `GET /device/control/settings` 配置驱动的 7 台站房设备（每类设备显示定制一个 js：`control/devices/`），element-plus 5 种 displayType 渲染（`control/renderers/`）；`?focus={uid}` 锚点滚动+高亮。
+- **数据流（纯流式）**：加载仅两次查询（snapshot + DM settings），此后值变化走 SSE `device.data.update` 帧、控制终态走 SSE **`control.completed`** 帧（`AsmControlService.finalizeOutcome` → `AsmSseBroadcaster.broadcastNamed`），零轮询；SSE 断连中禁「确认」，重连一次性补偿（snapshot 重拉 + 在途项 `GET /asm-monitor/control/{id}` 单查）。
+- **交互模型**：per-card 修改出「确认/撤销」（确认=串行逐 attr POST /control，行内徽章 PENDING→SUCCESS/FAILED/TIMEOUT）；dirty 字段不被 SSE 帧覆盖（其他渠道控制实时反映）；门禁 stateless 命令纳入统一待执行模型（primary+对勾角标）。
+- **settled 收敛模型**：SUCCESS=物理写入被接受 ≠ 逻辑 attr 可读状态已翻转（实测 SUCCESS 后 ~150ms 内有携带旧值的帧到达）——SUCCESS 后 `settled[uid][attrId]` 钉住提交值（`SETTLED_MAX_MS=10s` 常量兜底），收敛窗内不同值帧判迟到旧帧忽略、同值帧=收敛交还 live；显示优先级 `pending → settled → live`。批次徽章生命周期：beginSubmit 清整卡旧徽章。
 
 ## 报警记录生命周期（episode 心跳窗）
 
@@ -53,8 +63,8 @@ DDL 手动 apply（无自动迁移）：`src/main/resources/sql/asm_data.sql`（
 | `GET /history` | granularity / params / mode / unit / start / end / 分页 |
 | `GET /stat-params` | 可查参数目录（SDK 同源） |
 | `/alarm-rule` CRUD、`GET /alarm-record/list?status=` | 报警规则（改后热加载）与记录（状态过滤） |
-| `POST /control`、`GET /control-record/list` | 控制下发（REMOTE）与审计查询 |
-| `GET/PUT /config-stat`、`GET/PUT /config-unit` | 聚合配置（enabled/粒度掩码/物化 mode）与单位偏好（STANDARD 行由 seed 维护不开放写） |
+| `POST /control`、`GET /control-record/list`、`GET /control/{id}` | 控制下发（REMOTE）、审计查询、单条终态查询（仅 SSE 重连补偿用，非轮询通道） |
+| `GET/PUT /config-stat`、`GET/PUT /config-unit` | 聚合配置（enabled/粒度掩码/物化 mode）与单位偏好（STANDARD 行由 seed 维护不开放写）；config-unit PUT 体含可空 `displayPrecision`（0-6，null=不覆盖），snapshot 数值行含 `unitKey`/`displayPrecision`/`unitOptions`（单位设置抽屉数据源） |
 
 ### 对外 SDK（跨集成消费方）
 

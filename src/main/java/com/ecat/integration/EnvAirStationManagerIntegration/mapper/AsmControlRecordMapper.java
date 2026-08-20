@@ -22,6 +22,9 @@ public interface AsmControlRecordMapper {
     /** 执行终态回填（result/after_value/error/duration_ms）。 */
     int updateResult(AsmControlRecord record);
 
+    /** 按主键查单条（SSE 重连补偿单查；不存在返 null 由调用方明确拒绝）。 */
+    AsmControlRecord selectById(@Param("id") long id);
+
     /**
      * 控制记录时间窗查询（窗口按 created_at 落窗，created_at 降序——最新在前）。
      *

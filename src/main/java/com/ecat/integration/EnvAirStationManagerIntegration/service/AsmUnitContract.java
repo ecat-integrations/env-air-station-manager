@@ -37,8 +37,21 @@ public class AsmUnitContract {
 
     private final Log log = LogFactory.getLogger(getClass());
 
-    /** per-uid 缓存：uid → (attrId → (purpose → 单位))。null 单位=该行存在但无量纲；缺 purpose 键=无该行（显原生）。 */
-    private final ConcurrentHashMap<String, Map<String, EnumMap<AsmUnitPurpose, String>>> uidCache =
+    /**
+     * 单位偏好窄行缓存值：unit（null=行存在但无量纲）+ displayPrecision（null=未配置，修约走三级链）。
+     */
+    static final class UnitRow {
+        final String unit;
+        final Integer displayPrecision;
+
+        UnitRow(String unit, Integer displayPrecision) {
+            this.unit = unit;
+            this.displayPrecision = displayPrecision;
+        }
+    }
+
+    /** per-uid 缓存：uid → (attrId → (purpose → UnitRow))。null 单位=该行存在但无量纲；缺 purpose 键=无该行（显原生）。 */
+    private final ConcurrentHashMap<String, Map<String, EnumMap<AsmUnitPurpose, UnitRow>>> uidCache =
             new ConcurrentHashMap<>();
 
     /**
@@ -48,8 +61,18 @@ public class AsmUnitContract {
      *         两义由调用方按「无行→attr nativeUnit / 行 null→无量纲」区分时用 {@link #hasRow}
      */
     public String resolveUnit(AsmUnitPurpose purpose, String uid, String attrId) {
-        EnumMap<AsmUnitPurpose, String> purposes = purposesOf(uid, attrId);
-        return purposes.get(purpose);
+        UnitRow row = purposesOf(uid, attrId).get(purpose);
+        return row != null ? row.unit : null;
+    }
+
+    /**
+     * 该 series MONITOR 行配置的监控页展示小数位（0-6）。null=未配置——调用方走
+     * def displayPrecision → {@link AsmDisplayRounder#DEFAULT_DISPLAY_PRECISION} 三级链。
+     * 精度属监控页（瓦片/抽屉/SSE）域，历史页出口不经本方法。
+     */
+    public Integer monitorDisplayPrecision(String uid, String attrId) {
+        UnitRow row = purposesOf(uid, attrId).get(AsmUnitPurpose.MONITOR);
+        return row != null ? row.displayPrecision : null;
     }
 
     /** 该 (series, purpose) 是否有配置行（区分「无行显原生」与「行存在但无量纲」）。 */
@@ -153,8 +176,8 @@ public class AsmUnitContract {
     }
 
     /** 加载（或读缓存）uid 全行并取目标 attr 的 purpose 映射；uid 无行返空映射（负结果不缓存）。 */
-    private EnumMap<AsmUnitPurpose, String> purposesOf(String uid, String attrId) {
-        Map<String, EnumMap<AsmUnitPurpose, String>> byAttr = uidCache.get(uid);
+    private EnumMap<AsmUnitPurpose, UnitRow> purposesOf(String uid, String attrId) {
+        Map<String, EnumMap<AsmUnitPurpose, UnitRow>> byAttr = uidCache.get(uid);
         if (byAttr == null) {
             byAttr = loadUid(uid);
             if (byAttr.isEmpty()) {
@@ -163,17 +186,18 @@ public class AsmUnitContract {
             }
             uidCache.put(uid, byAttr);
         }
-        EnumMap<AsmUnitPurpose, String> purposes = byAttr.get(attrId);
+        EnumMap<AsmUnitPurpose, UnitRow> purposes = byAttr.get(attrId);
         return purposes != null ? purposes : new EnumMap<>(AsmUnitPurpose.class);
     }
 
-    /** selectByLogicDevice → (attrId → (purpose → unit))；空行集返空 Map（调用侧不缓存）。 */
-    private Map<String, EnumMap<AsmUnitPurpose, String>> loadUid(String uid) {
-        Map<String, EnumMap<AsmUnitPurpose, String>> byAttr = new ConcurrentHashMap<>();
+    /** selectByLogicDevice → (attrId → (purpose → UnitRow))；空行集返空 Map（调用侧不缓存）。 */
+    private Map<String, EnumMap<AsmUnitPurpose, UnitRow>> loadUid(String uid) {
+        Map<String, EnumMap<AsmUnitPurpose, UnitRow>> byAttr = new ConcurrentHashMap<>();
         for (com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmConfigUnit row
                 : configUnitMapper.selectByLogicDevice(uid)) {
             byAttr.computeIfAbsent(row.getAttrId(), k -> new EnumMap<>(AsmUnitPurpose.class))
-                    .put(AsmUnitPurpose.of(row.getPurpose()), row.getUnit());
+                    .put(AsmUnitPurpose.of(row.getPurpose()),
+                            new UnitRow(row.getUnit(), row.getDisplayPrecision()));
         }
         return byAttr;
     }

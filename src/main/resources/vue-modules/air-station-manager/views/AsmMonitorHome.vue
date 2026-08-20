@@ -17,6 +17,8 @@
         <button v-for="opt in UNIT_OPTIONS" :key="opt.value" type="button"
                 class="asm-unit-btn" :class="{ active: unitMode === opt.value }"
                 @click="onUnitPick(opt.value)">{{ opt.label }}</button>
+        <!-- 单位设置抽屉入口：编辑 MONITOR（自定义）行的单位与小数位；「默认」模式读 STANDARD 行不受影响 -->
+        <button type="button" class="asm-btn asm-unit-setting-btn" @click="openUnitSettings">⚙ 单位设置</button>
       </span>
     </div>
 
@@ -62,6 +64,9 @@
           <span class="asm-dot" :class="dotClass(drawerDevice)" />
           <span v-if="drawerDevice.online">在线</span>
           <span v-else class="asm-offline-text">离线 {{ offlineText(drawerDevice) }}</span>
+          <!-- 设备控制入口：仅 DM 配置的可控设备（空调/灯光/排风扇/门禁/采样管/稳压电源）显示 -->
+          <el-button v-if="isControllable(drawerDevice)" type="primary" size="small" class="asm-drawer-control-btn"
+                  data-asm="drawer-control-btn" @click="goDeviceControl(drawerDevice)">设备控制</el-button>
         </div>
         <!-- 设备级状态条：仅在有报警或离线时出现（在线且无报警时隐藏，保持抽屉简洁）；
              报警徽章并集复用 deviceAlarmBadges，按档 tier-danger/tier-warning 渲染 -->
@@ -85,12 +90,64 @@
         </table>
       </div>
     </el-drawer>
+
+    <!-- 单位设置抽屉：编辑 MONITOR（自定义）行（单位下拉含同类+气态跨类候选；小数位仅监控页生效，历史页不动）。
+         「默认」模式下瓦片不受影响（读 STANDARD 行），仅在「自定义」模式实时反映（后端写后已失效缓存）。 -->
+    <el-drawer v-model="unitDrawerVisible" title="单位设置（自定义模式）" size="640px">
+      <div class="asm-unit-settings">
+        <div class="asm-unit-settings-bar">
+          <span class="asm-unit-label">设备:</span>
+          <el-select v-model="unitSettingUid" placeholder="选择设备" size="default" style="width: 260px" data-asm="unit-device-select">
+            <el-option-group v-for="g in unitDeviceGroups" :key="g.key" :label="g.name">
+              <el-option v-for="d in g.devices" :key="d.logicDeviceUniqueId"
+                         :value="d.logicDeviceUniqueId" :label="d.displayName || d.logicDeviceUniqueId" />
+            </el-option-group>
+          </el-select>
+        </div>
+        <table v-if="unitSettingDevice" class="asm-table">
+          <thead>
+            <tr><th>参数</th><th>当前值</th><th>单位</th><th>小数位</th></tr>
+          </thead>
+          <tbody>
+            <tr v-for="r in unitSettingRows" :key="r.attrId">
+              <td>{{ r.displayName || r.attrId }}</td>
+              <td>{{ attrValue(r) }}<small v-if="r.unit" class="asm-unit">{{ r.unit }}</small></td>
+              <td>
+                <el-select v-if="r.editable && r.unitOptions" v-model="r.formUnit" size="small"
+                           style="width: 130px" :data-asm="'unit-select-' + r.attrId">
+                  <el-option-group v-for="g in r.unitOptions" :key="g.classLabel" :label="g.classLabel">
+                    <el-option v-for="u in g.units" :key="u.key" :value="u.key" :label="u.symbol" />
+                  </el-option-group>
+                </el-select>
+                <span v-else class="asm-muted">{{ r.unit || '-' }}</span>
+              </td>
+              <td>
+                <el-input-number v-if="r.editable" v-model="r.formPrecision" :min="0" :max="6" size="small"
+                                 :placeholder="String(r.displayPrecision)" style="width: 100px"
+                                 :data-asm="'precision-' + r.attrId" />
+                <span v-else class="asm-muted">-</span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <div v-else class="asm-empty">选择设备后编辑其参数单位与小数位</div>
+        <div class="asm-unit-settings-actions">
+          <el-button type="primary" size="small" :loading="unitSaving" :disabled="!unitSettingDevice" data-asm="unit-save"
+                     @click="saveUnitSettings">保存</el-button>
+        </div>
+        <div class="asm-unit-settings-hint">
+          单位候选 = 同类全部单位 + 气态跨类（mg/m³↔ppm）；跨类不可换算目标选中后按现有语义显原生。
+          小数位留空 = 不修改当前配置。
+        </div>
+      </div>
+    </el-drawer>
   </div>
 </template>
 
 <script>
 // keep-alive 契约：Options API 组件 name 必须等于路由 name（monitor），宿主 keep-alive 按组件名匹配缓存。
-import { getSnapshot } from '@/api/asm'
+import { getSnapshot, putConfigUnit } from '@/api/asm'
+import { isControllableUid } from '../control/constants'
 import { DEVICE_GROUPS, catalogOf } from '@/utils/deviceCatalog'
 import { AsmMonitorSseClient } from '../sse/AsmMonitorSseClient'
 import { statusTier, statusColor } from '../utils/statusBadge'
@@ -119,7 +176,8 @@ export default {
       // 单位模式（standard/custom，对齐 ADM）：localStorage 恢复上次选择，首次默认 standard
       unitMode: loadUnitMode(),
       UNIT_OPTIONS: [
-        { value: 'standard', label: '标准' },
+        // 显示文字「默认」（=STANDARD 行标准口径）；localStorage 存值仍是 standard（老用户已存选择直接恢复）
+        { value: 'standard', label: '默认' },
         { value: 'custom', label: '自定义' },
       ],
       drawerVisible: false,
@@ -133,7 +191,18 @@ export default {
       // 时间文本仅随本 tick 重算——避免 SSE 帧与粗粒度 tick 双源触发导致的非线性跳变）
       nowMs: Date.now(),
       nowTimer: null,
+      // 单位设置抽屉状态：选中设备 uid + 行编辑态（formUnit/formPrecision 仅数值行可编辑）
+      unitDrawerVisible: false,
+      unitSettingUid: null,
+      unitFormRows: [],
+      unitSaving: false,
     }
+  },
+  watch: {
+    // 单位设置抽屉换设备：重置行编辑态（formUnit=新设备当前 unitKey）
+    unitSettingUid() {
+      this.syncUnitFormRows()
+    },
   },
   computed: {
     // 筛选 chips：计数 computed 派生（离线=!online / 报警=deviceAlarmBadges 并集非空），SSE patch 后自然响应
@@ -167,6 +236,24 @@ export default {
     // 抽屉行序（与后端 sortAttrRows 同 key 镜像，保 SSE patch 后不乱序）：分组序 状态类(0)→命令类(1)→数值类(2)
     // （命令=attrId _command 结尾；数值=行有数值；状态=其余），组内 displayName 拼音序 + 「重置*」多音字例外
     // （按 chóng 排组内最前，与后端 ATTR_ORDER 同口径）。瓦片核心参数按 catalog 顺序不受影响。
+    // 单位设置抽屉设备下拉：按 catalog 分组、组内中文名拼音序（选项全中文名 displayName，不泄 uid）
+    unitDeviceGroups() {
+      return DEVICE_GROUPS
+        .map(g => ({
+          ...g,
+          devices: this.devices
+            .filter(d => catalogOf(d.logicDeviceUniqueId).group === g.key)
+            .sort((a, b) => pinyinCompare(a.displayName || a.logicDeviceUniqueId, b.displayName || b.logicDeviceUniqueId)),
+        }))
+        .filter(g => g.devices.length)
+    },
+    unitSettingDevice() {
+      return this.devices.find(d => d.logicDeviceUniqueId === this.unitSettingUid) || null
+    },
+    // 选中设备的可编辑行快照：仅数值类（attrGroup==2）可编辑单位/小数位
+    unitSettingRows() {
+      return this.unitFormRows
+    },
     drawerAttrs() {
       if (!this.drawerDevice) return []
       const groupOf = a => {
@@ -287,9 +374,64 @@ export default {
       if (this.deviceAlarmBadges(d).length) return 'alarm'
       return d.online ? 'on' : 'off'
     },
+    // 打开单位设置抽屉：初始化选中设备的行编辑态（formUnit=当前 unitKey 回显、formPrecision 留空=不改）
+    openUnitSettings() {
+      this.unitDrawerVisible = true
+      this.syncUnitFormRows()
+    },
+    syncUnitFormRows() {
+      const dev = this.unitSettingDevice
+      if (!dev) { this.unitFormRows = []; return }
+      this.unitFormRows = [...dev.attrs]
+        .sort((a, b) => {
+          const ga = a.attrGroup != null ? a.attrGroup : 0
+          const gb = b.attrGroup != null ? b.attrGroup : 0
+          if (ga !== gb) return ga - gb
+          return pinyinCompare(a.displayName || a.attrId, b.displayName || b.attrId)
+        })
+        .map(a => ({
+          ...a,
+          editable: a.attrGroup === 2,
+          formUnit: a.unitKey != null ? a.unitKey : '',
+          formPrecision: null,
+        }))
+    },
+    // 保存：逐行 PUT config-unit（purpose=MONITOR）；unit 回传候选 key（空=显原生），precision 空不覆盖
+    async saveUnitSettings() {
+      const dev = this.unitSettingDevice
+      if (!dev) return
+      this.unitSaving = true
+      try {
+        for (const r of this.unitFormRows.filter(x => x.editable)) {
+          await putConfigUnit({
+            logicDeviceUniqueId: dev.logicDeviceUniqueId,
+            attrId: r.attrId,
+            purpose: 'MONITOR',
+            unit: r.formUnit || null,
+            displayPrecision: r.formPrecision,
+          })
+        }
+        this.$message && this.$message.success('单位设置已保存（自定义模式下即时生效）')
+        // 后端写后已失效缓存；重拉 snapshot 使瓦片/抽屉立即反映（自定义模式）——SSE 后续帧同口径
+        if (this.unitMode === 'custom') await this.load()
+        this.syncUnitFormRows()
+      } finally {
+        this.unitSaving = false
+      }
+    },
     openDrawer(d) {
       this.drawerUid = d.logicDeviceUniqueId
       this.drawerVisible = true
+    },
+    // 可控判定（设计变更 2026-08-20）：前端常量类型集（control/constants.js）为唯一判定源，
+    // 不再由 DM settings 拉取结果决定——去 DM 权限耦合（无 DM 权限时总览按钮仍显示）。
+    isControllable(d) {
+      return d && isControllableUid(d.logicDeviceUniqueId)
+    },
+    // 跳设备控制页并锚点聚焦该设备（路由 name= integration-..._device_control，query.focus=uid）
+    goDeviceControl(d) {
+      this.drawerVisible = false
+      this.$router.push({ name: 'integration-env-air-station-manager_device_control', query: { focus: d.logicDeviceUniqueId } })
     },
     // 瓦片核心参数行：按 catalog coreAttrs 顺序取 attrs 行；attr 缺数据时占位（不隐行，用户可感知缺参）
     coreParams(d) {
@@ -371,7 +513,14 @@ export default {
 .asm-muted { color: #c0c4cc; }
 .asm-empty { color: #909399; padding: 12px; text-align: center; }
 .asm-drawer-meta { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; font-size: 13px; color: #303133; }
+.asm-drawer-control-btn { margin-left: auto; }
 .asm-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .asm-table th, .asm-table td { border-bottom: 1px solid #ebeef5; padding: 6px 8px; text-align: left; }
 .asm-table th { background: #fafafa; color: #606266; }
+/* 单位设置抽屉 */
+.asm-unit-setting-btn { padding: 4px 10px; margin-left: 8px; font-size: 13px; }
+.asm-unit-settings { padding: 0 4px; }
+.asm-unit-settings-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.asm-unit-settings-actions { margin-top: 10px; }
+.asm-unit-settings-hint { margin-top: 8px; font-size: 12px; color: #909399; line-height: 1.6; }
 </style>

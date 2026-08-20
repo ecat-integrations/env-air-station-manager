@@ -121,6 +121,7 @@ CREATE TABLE asm_config_unit (
     attr_id                varchar(64) NOT NULL,
     purpose                varchar(16) NOT NULL,   -- 用途（AsmUnitPurpose 枚举名）：STORAGE 物化 / MONITOR 卡片 / HISTORY 历史
     unit                   varchar(64),            -- 目标单位（getFullUnitString key 形式；NULL=无量纲/显原生）
+    display_precision      integer,                -- 监控页展示小数位（0-6；NULL=走 def displayPrecision→默认2 三级链；PUT 不传不覆盖）
     created_by             varchar(64),
     updated_by             varchar(64),
     created_at             timestamptz  NOT NULL DEFAULT now(),

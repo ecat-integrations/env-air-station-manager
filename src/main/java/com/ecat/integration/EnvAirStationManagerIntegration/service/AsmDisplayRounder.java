@@ -40,4 +40,16 @@ public final class AsmDisplayRounder {
                 .setScale(scale, RoundingMode.HALF_EVEN)
                 .doubleValue();
     }
+
+    /**
+     * 监控页修约精度三级链（单位设置抽屉定案）：该 series MONITOR 行 display_precision →
+     * attr def displayPrecision → {@link #DEFAULT_DISPLAY_PRECISION}。前级非 null 即覆盖后级；
+     * 任一级非法（&lt;0）视为缺席走下一级。只作用于监控页（瓦片/抽屉/SSE），历史页出口不调本方法。
+     */
+    public static Integer resolvePrecision(Integer configPrecision, Integer defPrecision) {
+        if (configPrecision != null && configPrecision >= 0) {
+            return configPrecision;
+        }
+        return defPrecision != null && defPrecision >= 0 ? defPrecision : DEFAULT_DISPLAY_PRECISION;
+    }
 }

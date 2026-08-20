@@ -78,7 +78,8 @@ public class AsmConfigController extends BaseController {
             throw new IllegalArgumentException("配置请求体为空");
         }
         AsmConfigUnit saved = configService.updateUnitPref(request.getLogicDeviceUniqueId(),
-                request.getAttrId(), request.getPurpose(), request.getUnit(), caller);
+                request.getAttrId(), request.getPurpose(), request.getUnit(),
+                request.getDisplayPrecision(), caller);
         return AjaxResult.success("单位偏好已保存（读出口缓存已失效，即时生效）", saved);
     }
 
@@ -120,6 +121,7 @@ public class AsmConfigController extends BaseController {
         private String attrId;
         private String purpose;
         private String unit;
+        private Integer displayPrecision;
 
         public ConfigUnitRequest() {
         }
@@ -139,5 +141,7 @@ public class AsmConfigController extends BaseController {
         public void setPurpose(String v) { this.purpose = v; }
         public String getUnit() { return unit; }
         public void setUnit(String v) { this.unit = v; }
+        public Integer getDisplayPrecision() { return displayPrecision; }
+        public void setDisplayPrecision(Integer v) { this.displayPrecision = v; }
     }
 }

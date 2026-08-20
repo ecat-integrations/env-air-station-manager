@@ -1,6 +1,7 @@
 package com.ecat.integration.EnvAirStationManagerIntegration.controller;
 
 import com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmControlRecord;
+import com.ecat.integration.EnvAirStationManagerIntegration.mapper.AsmControlRecordMapper;
 import com.ecat.integration.EnvAirStationManagerIntegration.service.AsmControlService;
 import com.ecat.integration.EnvAirStationManagerIntegration.support.AsmControlOrigin;
 import com.ruoyi.common.core.controller.BaseController;
@@ -8,6 +9,8 @@ import com.ruoyi.common.core.domain.AjaxResult;
 import com.ruoyi.common.utils.SecurityUtils;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -26,6 +29,7 @@ import org.springframework.web.bind.annotation.RestController;
 public class AsmControlController extends BaseController {
 
     private final AsmControlService controlService;
+    private final AsmControlRecordMapper recordMapper;
 
     /** 控制请求体（uid/attrId/value）。 */
     public static class AsmControlRequest {
@@ -81,6 +85,20 @@ public class AsmControlController extends BaseController {
         }
         AsmControlRecord record = controlService.execute(AsmControlOrigin.REMOTE, caller,
                 request.getUid(), request.getAttrId(), request.getValue());
+        return AjaxResult.success(record);
+    }
+
+    /**
+     * 按主键单查控制记录——<b>仅设计用途=SSE 重连补偿单查</b>（前端重连成功后对在途 PENDING 项
+     * 一次性按 id 对齐终态，生命周期事件触发，非轮询通道）；不存在明确抛 IAE（400，模块惯例）。
+     */
+    @PreAuthorize("@ss.hasPermi('asm-monitor:control:execute')")
+    @GetMapping("/{id}")
+    public AjaxResult getById(@PathVariable("id") long id) {
+        AsmControlRecord record = recordMapper.selectById(id);
+        if (record == null) {
+            throw new IllegalArgumentException("控制记录不存在: id=" + id);
+        }
         return AjaxResult.success(record);
     }
 }

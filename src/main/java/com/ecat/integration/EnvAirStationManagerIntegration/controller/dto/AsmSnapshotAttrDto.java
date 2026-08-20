@@ -1,5 +1,6 @@
 package com.ecat.integration.EnvAirStationManagerIntegration.controller.dto;
 
+import java.util.List;
 import lombok.Builder;
 import lombok.Value;
 
@@ -48,4 +49,19 @@ public class AsmSnapshotAttrDto {
      * （SSE 帧必有值：命令行 attrId 命中、数值行 value 为数、状态行 text，启发不漂）。
      */
     Integer attrGroup;
+
+    /**
+     * 值实际单位 full key（如 TemperatureUnit.CELSIUS；数值行才有）。单位设置抽屉单位下拉回显/高亮用
+     * ——unit 字段是符号（°C）不可反推 key。null=无量纲/显原生。
+     */
+    String unitKey;
+
+    /** 监控页生效修约精度（三级链解析结果；数值行才有）——抽屉小数位输入框 placeholder。 */
+    Integer displayPrecision;
+
+    /**
+     * 单位候选分组（数值行才有；同类组在前+气态跨类组）：单位设置抽屉单位下拉数据源。
+     * null=源单位缺席/脏 key（无候选，只可改小数位）。
+     */
+    List<AsmUnitOptionGroup> unitOptions;
 }

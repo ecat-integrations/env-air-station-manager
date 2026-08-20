@@ -95,7 +95,10 @@ public class AsmSseConsumer extends AbstractBusConsumer<DeviceDataChangedEvent> 
         if (value instanceof Number) {
             double raw = ((Number) value).doubleValue();
             String sourceKey = unitKey(state.getNativeUnit());
-            Integer precision = def != null ? def.getDisplayPrecision() : null;
+            // 监控页修约精度三级链（与 snapshot 同口径）：MONITOR 行 display_precision → def → 默认 2
+            Integer precision = AsmDisplayRounder.resolvePrecision(
+                    unitContract.monitorDisplayPrecision(uid, attrId),
+                    def != null ? def.getDisplayPrecision() : null);
             AsmDisplayValue custom = unitContract.resolveDisplay(AsmUnitPurpose.MONITOR, uid, attrId, raw, sourceKey);
             AsmDisplayValue standard = unitContract.resolveDisplay(AsmUnitPurpose.STANDARD, uid, attrId, raw, sourceKey);
             return new AsmSseEvent(uid, attrId, name,

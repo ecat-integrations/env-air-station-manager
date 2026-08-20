@@ -51,15 +51,26 @@ public class AsmSseBroadcaster {
     }
 
     /**
-     * 广播单事件 JSON 给所有在线 emitter（AsmSseConsumer 调）。
+     * 广播单事件 JSON 给所有在线 emitter（AsmSseConsumer 调）——具名 {@link AsmSseEvent#TYPE} 帧。
      *
      * @param json AsmSseEvent 序列化后的 JSON 串
      */
     public void broadcast(String json) {
+        broadcastNamed(AsmSseEvent.TYPE, json);
+    }
+
+    /**
+     * 广播任意具名帧给所有在线 emitter（如控制终态帧 {@code AsmControlCompletedEvent.TYPE}）。
+     * 死连接清理语义与 {@link #broadcast} 一致（send 抛任何异常即摘，不中断全池）。
+     *
+     * @param eventName SSE event 帧名（前端具名 listener 匹配依据）
+     * @param json      载荷序列化后的 JSON 串
+     */
+    public void broadcastNamed(String eventName, String json) {
         emitters.forEach((id, em) -> {
             try {
                 em.send(SseEmitter.event()
-                        .name(AsmSseEvent.TYPE)
+                        .name(eventName)
                         .data(json, MediaType.APPLICATION_JSON));
             } catch (RuntimeException | IOException e) {
                 emitters.remove(id);

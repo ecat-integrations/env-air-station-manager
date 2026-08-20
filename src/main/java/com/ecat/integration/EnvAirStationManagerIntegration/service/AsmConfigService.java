@@ -74,11 +74,18 @@ public class AsmConfigService {
     /**
      * 写单条单位偏好（MONITOR/HISTORY）。写后失效该 uid 单位缓存（读出口下次解析重读 DB）。
      *
-     * @throws IllegalArgumentException series 空白 / purpose 非法或为 STORAGE
+     * <p>displayPrecision 可空：null=本次不改小数位（upsert coalesce 不覆盖已有值）；非 null 须在
+     * 0-6 越界抛（监控页修约三级链的一级配置，仅 MONITOR 行语义生效）。</p>
+     *
+     * @throws IllegalArgumentException series 空白 / purpose 非法或为 STORAGE / displayPrecision 越界
      */
     public AsmConfigUnit updateUnitPref(String logicDeviceUniqueId, String attrId,
-                                        String purpose, String unit, String operator) {
+                                        String purpose, String unit, Integer displayPrecision,
+                                        String operator) {
         requireSeries(logicDeviceUniqueId, attrId);
+        if (displayPrecision != null && (displayPrecision < 0 || displayPrecision > 6)) {
+            throw new IllegalArgumentException("displayPrecision 越界（0-6）：" + displayPrecision);
+        }
         AsmUnitPurpose p = AsmUnitPurpose.of(purpose);
         if (p == AsmUnitPurpose.STORAGE) {
             throw new IllegalArgumentException("STORAGE 行由 seed 维护（存储单位换算源），配置端点只读写 MONITOR/HISTORY 偏好");
@@ -91,6 +98,7 @@ public class AsmConfigService {
                 .attrId(attrId)
                 .purpose(p.name())
                 .unit(unit)
+                .displayPrecision(displayPrecision)
                 .createdBy(operator)
                 .updatedBy(operator)
                 .build();

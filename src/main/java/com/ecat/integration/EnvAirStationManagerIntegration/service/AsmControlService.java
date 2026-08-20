@@ -8,8 +8,11 @@ import com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmControlRec
 import com.ecat.integration.EnvAirStationManagerIntegration.mapper.AsmControlRecordMapper;
 import com.ecat.integration.EnvAirStationManagerIntegration.support.AsmControlAction;
 import com.ecat.integration.EnvAirStationManagerIntegration.support.AsmControlOrigin;
+import com.ecat.integration.EnvAirStationManagerIntegration.sse.AsmControlCompletedEvent;
+import com.ecat.integration.EnvAirStationManagerIntegration.sse.AsmSseBroadcaster;
 import com.ecat.integration.EnvAirStationManagerIntegration.support.AsmControlResult;
 import com.ecat.integration.logicdevice.LogicDevice.LogicDevice;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ecat.integration.logicdevice.LogicDeviceManager;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -72,29 +75,34 @@ public class AsmControlService {
     private final TimeoutScheduler timeoutScheduler;
     private final Clock clock;
     private final Duration timeout;
+    /** 控制终态帧广播（尽力而为通道，失败不得影响审计落库）。 */
+    private final AsmSseBroadcaster broadcaster;
+    /** 终态帧序列化（自拥裸 ObjectMapper，载荷无时间类型，同模块 consumer 模式）。 */
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     /** 生产构造：自建单线程 executor + 定时超时调度 + 系统钟。 */
     @Autowired
-    public AsmControlService(AsmControlRecordMapper recordMapper) {
+    public AsmControlService(AsmControlRecordMapper recordMapper, AsmSseBroadcaster broadcaster) {
         this(recordMapper, AsmControlService::resolveStationDevice,
                 Executors.newSingleThreadExecutor(r -> {
                     Thread t = new Thread(r, "asm-control-executor");
                     t.setDaemon(true);
                     return t;
                 }),
-                prodTimeoutScheduler(), Clock.systemDefaultZone(), DEFAULT_TIMEOUT);
+                prodTimeoutScheduler(), Clock.systemDefaultZone(), DEFAULT_TIMEOUT, broadcaster);
     }
 
     /** 测试构造：全依赖注入（executor/调度器/时钟手动驱动）。 */
     AsmControlService(AsmControlRecordMapper recordMapper, Function<String, LogicDevice> stationResolver,
                       Executor controlExecutor, TimeoutScheduler timeoutScheduler, Clock clock,
-                      Duration timeout) {
+                      Duration timeout, AsmSseBroadcaster broadcaster) {
         this.recordMapper = recordMapper;
         this.stationResolver = stationResolver;
         this.controlExecutor = controlExecutor;
         this.timeoutScheduler = timeoutScheduler;
         this.clock = clock;
         this.timeout = timeout;
+        this.broadcaster = broadcaster;
     }
 
     private static TimeoutScheduler prodTimeoutScheduler() {
@@ -209,6 +217,7 @@ public class AsmControlService {
         record.setError(error);
         record.setDurationMs(Duration.between(start, clock.instant()).toMillis());
         recordMapper.updateResult(record);
+        broadcastCompletion(record);
         if (result != AsmControlResult.SUCCESS) {
             log.warn("[诊断调试] 控制执行终态=" + result + " id=" + record.getId()
                     + " uid=" + record.getLogicDeviceUniqueId() + " attr=" + record.getAttrId()
@@ -216,8 +225,24 @@ public class AsmControlService {
         }
     }
 
-    /** AttrState 快照串：displayValue + 空格 + 单位（无量纲只存 displayValue；state 为 null 返 null）。 */
-    private static String snapshot(AttrState<?> state) {
+    /**
+     * 终态广播：审计落库后推 {@code control.completed} 具名帧——尽力而为通道，
+     * 序列化/广播任何异常只记 debug 不上抛（不得影响审计；broadcaster 内部已自摘死连接，
+     * 前端丢帧兜底=20s 超时 + 重连补偿单查）。
+     */
+    private void broadcastCompletion(AsmControlRecord record) {
+        try {
+            broadcaster.broadcastNamed(AsmControlCompletedEvent.TYPE,
+                    objectMapper.writeValueAsString(new AsmControlCompletedEvent(
+                            record.getId(), record.getLogicDeviceUniqueId(), record.getAttrId(),
+                            record.getResult(), record.getError())));
+        } catch (Exception e) {
+            log.debug("[诊断调试] 控制终态帧广播失败（不影响审计落库）id=" + record.getId()
+                    + "：" + e);
+        }
+    }
+
+    /** AttrState 快照串：displayValue + 空格 + 单位（无量纲只存 displayValue；state 为 null 返 null）。 */    private static String snapshot(AttrState<?> state) {
         if (state == null || state.getDisplayValue() == null) {
             return null;
         }

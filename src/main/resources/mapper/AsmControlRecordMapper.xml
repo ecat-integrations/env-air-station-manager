@@ -50,6 +50,14 @@
         <include refid="listWhere"/>
     </select>
 
+    <!-- 单条查（SSE 重连补偿单查专用，生命周期事件触发非轮询） -->
+    <select id="selectById" resultMap="AsmControlRecordResult">
+        select id, origin, caller, logic_device_unique_id, attr_id, action,
+               before_value, requested_value, after_value, result, error, duration_ms, created_at
+        from asm_control_record
+        where id = #{id}
+    </select>
+
     <!-- 先落 PENDING：after_value/error/duration_ms 执行后才可知，不在 insert 列 -->
     <insert id="insert" parameterType="com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmControlRecord"
             useGeneratedKeys="true" keyProperty="id">

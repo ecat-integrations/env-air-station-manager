@@ -14,6 +14,8 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
@@ -76,7 +78,7 @@ class AsmConfigServiceTest {
     @Test
     void updateUnitPref_rejectsStoragePurpose() {
         assertThrows(IllegalArgumentException.class,
-                () -> service.updateUnitPref("uid-1", "temperature", "STORAGE", "mg/m3", "admin"));
+                () -> service.updateUnitPref("uid-1", "temperature", "STORAGE", "mg/m3", null, "admin"));
         verifyNoInteractions(configUnitMapper);
     }
 
@@ -84,19 +86,19 @@ class AsmConfigServiceTest {
     void updateUnitPref_rejectsStandardPurpose() {
         // STANDARD 是 seed 维护的标准口径行（standard 模式读出口），同 STORAGE 不开放用户写（对齐 ADM 配置域只写 MONITOR/HISTORY）
         assertThrows(IllegalArgumentException.class,
-                () -> service.updateUnitPref("uid-1", "temperature", "STANDARD", "mg/m3", "admin"));
+                () -> service.updateUnitPref("uid-1", "temperature", "STANDARD", "mg/m3", null, "admin"));
         verifyNoInteractions(configUnitMapper);
     }
 
     @Test
     void updateUnitPref_rejectsUnknownPurpose() {
         assertThrows(IllegalArgumentException.class,
-                () -> service.updateUnitPref("uid-1", "temperature", "DISPLAY", "mg/m3", "admin"));
+                () -> service.updateUnitPref("uid-1", "temperature", "DISPLAY", "mg/m3", null, "admin"));
     }
 
     @Test
     void updateUnitPref_upsertsThenInvalidatesUidCache() {
-        AsmConfigUnit saved = service.updateUnitPref("uid-1", "temperature", "HISTORY", "ug/m3", "alice");
+        AsmConfigUnit saved = service.updateUnitPref("uid-1", "temperature", "HISTORY", "ug/m3", null, "alice");
 
         ArgumentCaptor<AsmConfigUnit> captor = ArgumentCaptor.forClass(AsmConfigUnit.class);
         verify(configUnitMapper).upsert(captor.capture());
@@ -116,7 +118,31 @@ class AsmConfigServiceTest {
 
         verify(configUnitMapper).selectByPurpose("MONITOR");
         verify(configUnitMapper).selectByPurpose("HISTORY");
-        verify(configUnitMapper, org.mockito.Mockito.never()).selectByPurpose("STORAGE");
+        verify(configUnitMapper, never()).selectByPurpose("STORAGE");
         verifyNoInteractions(unitContract);
+    }
+
+    // ===== PUT config-unit displayPrecision 校验（单位设置抽屉）=====
+
+    @Test
+    void updateUnitPref_precisionBounds0And6Accepted() {
+        service.updateUnitPref("uid-1", "temperature", "MONITOR", "mg/m3", 0, "admin");
+        service.updateUnitPref("uid-1", "temperature", "MONITOR", "mg/m3", 6, "admin");
+        verify(configUnitMapper, times(2)).upsert(ArgumentCaptor.forClass(AsmConfigUnit.class).capture());
+    }
+
+    @Test
+    void updateUnitPref_precisionOutOfRangeThrows() {
+        assertThrows(IllegalArgumentException.class,
+                () -> service.updateUnitPref("uid-1", "temperature", "MONITOR", "mg/m3", -1, "admin"));
+        assertThrows(IllegalArgumentException.class,
+                () -> service.updateUnitPref("uid-1", "temperature", "MONITOR", "mg/m3", 7, "admin"));
+        verifyNoInteractions(configUnitMapper);
+    }
+
+    @Test
+    void updateUnitPref_precisionNullAllowedAndPassedThrough() {
+        AsmConfigUnit saved = service.updateUnitPref("uid-1", "temperature", "MONITOR", "mg/m3", null, "admin");
+        assertEquals(null, saved.getDisplayPrecision());
     }
 }

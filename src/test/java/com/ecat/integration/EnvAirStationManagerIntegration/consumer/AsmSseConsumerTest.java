@@ -72,6 +72,9 @@ class AsmSseConsumerTest {
 
     @BeforeEach
     void setUp() {
+        // Mockito 对未 stub 的 Integer 返回类型默认回 0（非 null）—— MONITOR 行未配置精度语义是 null，
+        // 显式 stub 防三级链被 mock 默认值误判为「配置 0 位」
+        when(unitContract.monitorDisplayPrecision(anyString(), anyString())).thenReturn(null);
         consumer = new AsmSseConsumer("asm-sse-test", CAPACITY, registry, broadcaster,
                 new ObjectMapper(), unitContract, alarmRegistry);
     }

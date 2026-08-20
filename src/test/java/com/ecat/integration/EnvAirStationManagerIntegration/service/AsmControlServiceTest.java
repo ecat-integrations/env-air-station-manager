@@ -8,6 +8,8 @@ import com.ecat.core.State.Unit.TemperatureUnit;
 import com.ecat.core.State.UnitInfo;
 import com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmControlRecord;
 import com.ecat.integration.EnvAirStationManagerIntegration.mapper.AsmControlRecordMapper;
+import com.ecat.integration.EnvAirStationManagerIntegration.sse.AsmControlCompletedEvent;
+import com.ecat.integration.EnvAirStationManagerIntegration.sse.AsmSseBroadcaster;
 import com.ecat.integration.EnvAirStationManagerIntegration.support.AsmControlOrigin;
 import com.ecat.integration.EnvAirStationManagerIntegration.support.AsmControlResult;
 import com.ecat.integration.logicdevice.LogicDevice.LogicDevice;
@@ -35,7 +37,11 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.contains;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -148,6 +154,8 @@ class AsmControlServiceTest {
     private AsmControlRecordMapper recordMapper;
     @Mock
     private LogicDevice stationDevice;
+    @Mock
+    private AsmSseBroadcaster broadcaster;
 
     private final ManualExecutor executor = new ManualExecutor();
     private final ManualTimeoutScheduler timeoutScheduler = new ManualTimeoutScheduler();
@@ -161,7 +169,7 @@ class AsmControlServiceTest {
         org.mockito.Mockito.lenient().when(stationDevice.getUniqueId()).thenReturn("logicdevice_station.th");
         devices.put("logicdevice_station.th", stationDevice);
         service = new AsmControlService(recordMapper, devices::get,
-                executor, timeoutScheduler, clock, TIMEOUT);
+                executor, timeoutScheduler, clock, TIMEOUT, broadcaster);
     }
 
     private static AttrState<Object> state(String displayValue, UnitInfo unit) {
@@ -298,6 +306,66 @@ class AsmControlServiceTest {
         verify(recordMapper).updateResult(cap.capture());
         assertEquals(AsmControlResult.FAILED, cap.getValue().getResult());
         assertTrue(cap.getValue().getError().contains("bad command"));
+    }
+
+    // ===== 终态帧广播：audit 落库后推 control.completed 具名帧；广播失败不影响审计 =====
+
+    @Test
+    void finalize_broadcastsControlCompletedFrameWithIdAndResult() {
+        stubInsertWithId(11L);
+        WritableAttr attr = okAttr("temperature", "25.5");
+        when(stationDevice.getAttrs()).thenReturn(attrs(attr));
+
+        service.execute(AsmControlOrigin.REMOTE, "admin", "logicdevice_station.th",
+                "temperature", "30.0");
+        executor.runAll();
+
+        verify(broadcaster).broadcastNamed(eq(AsmControlCompletedEvent.TYPE), contains("\"id\":11"));
+        verify(broadcaster).broadcastNamed(eq(AsmControlCompletedEvent.TYPE), contains("\"result\":\"SUCCESS\""));
+        verify(broadcaster).broadcastNamed(eq(AsmControlCompletedEvent.TYPE),
+                contains("\"uid\":\"logicdevice_station.th\""));
+    }
+
+    @Test
+    void finalize_timeoutFrameCarriesTimeoutResult() {
+        stubInsertWithId(12L);
+        WritableAttr attr = new WritableAttr("temperature", true, state("25.5", TemperatureUnit.CELSIUS),
+                (v, self) -> new CompletableFuture<>());
+        when(stationDevice.getAttrs()).thenReturn(attrs(attr));
+
+        service.execute(AsmControlOrigin.REMOTE, "admin", "logicdevice_station.th",
+                "temperature", "30.0");
+        timeoutScheduler.fireAll();
+
+        verify(broadcaster).broadcastNamed(eq(AsmControlCompletedEvent.TYPE), contains("\"result\":\"TIMEOUT\""));
+    }
+
+    @Test
+    void finalize_broadcastFailureDoesNotAffectAudit() {
+        stubInsertWithId(13L);
+        doThrow(new RuntimeException("sse down")).when(broadcaster)
+                .broadcastNamed(anyString(), anyString());
+        WritableAttr attr = okAttr("temperature", "25.5");
+        when(stationDevice.getAttrs()).thenReturn(attrs(attr));
+
+        AsmControlRecord rec = service.execute(AsmControlOrigin.REMOTE, "admin",
+                "logicdevice_station.th", "temperature", "30.0");
+        executor.runAll();   // 广播抛异常被吞（尽力而为通道），审计终态照常回填
+
+        assertEquals(AsmControlResult.SUCCESS, rec.getResult());
+        verify(recordMapper).updateResult(any(AsmControlRecord.class));
+    }
+
+    @Test
+    void execute_pendingStageDoesNotBroadcast() {
+        stubInsertWithId(14L);
+        WritableAttr attr = okAttr("temperature", "25.5");
+        when(stationDevice.getAttrs()).thenReturn(attrs(attr));
+
+        service.execute(AsmControlOrigin.REMOTE, "admin", "logicdevice_station.th",
+                "temperature", "30.0");   // 不跑 executor——PENDING 阶段零帧
+
+        verify(broadcaster, never()).broadcastNamed(anyString(), anyString());
     }
 
     // ===== 超时路径：如实记 TIMEOUT，迟到执行不双写、不猜结果 =====

@@ -13,6 +13,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.util.Collections;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -57,18 +58,34 @@ class AsmConfigControllerTest {
     void putUnit_passesCallerAndReturnsRow() {
         AsmConfigUnit saved = AsmConfigUnit.builder().logicDeviceUniqueId("uid-1").attrId("temperature")
                 .purpose("HISTORY").unit("ug/m3").build();
-        when(configService.updateUnitPref("uid-1", "temperature", "HISTORY", "ug/m3", "admin")).thenReturn(saved);
+        when(configService.updateUnitPref("uid-1", "temperature", "HISTORY", "ug/m3", null, "admin")).thenReturn(saved);
 
         AjaxResult result = controller.putUnitForCaller(
                 new AsmConfigController.ConfigUnitRequest("uid-1", "temperature", "HISTORY", "ug/m3"), "admin");
 
-        verify(configService).updateUnitPref("uid-1", "temperature", "HISTORY", "ug/m3", "admin");
+        verify(configService).updateUnitPref("uid-1", "temperature", "HISTORY", "ug/m3", null, "admin");
         assertEquals(saved, result.get(AjaxResult.DATA_TAG));
     }
 
     @Test
     void putStat_nullBodyThrows() {
-        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+        assertThrows(IllegalArgumentException.class,
                 () -> controller.putStatForCaller(null, "admin"));
+    }
+
+    @Test
+    void putUnit_passesDisplayPrecisionThrough() {
+        AsmConfigUnit saved = AsmConfigUnit.builder().logicDeviceUniqueId("uid-1").attrId("co")
+                .purpose("MONITOR").unit("AirMassUnit.MGM3").displayPrecision(3).build();
+        when(configService.updateUnitPref("uid-1", "co", "MONITOR", "AirMassUnit.MGM3", 3, "admin"))
+                .thenReturn(saved);
+
+        AsmConfigController.ConfigUnitRequest req =
+                new AsmConfigController.ConfigUnitRequest("uid-1", "co", "MONITOR", "AirMassUnit.MGM3");
+        req.setDisplayPrecision(3);
+
+        AjaxResult result = controller.putUnitForCaller(req, "admin");
+        verify(configService).updateUnitPref("uid-1", "co", "MONITOR", "AirMassUnit.MGM3", 3, "admin");
+        assertEquals(saved, result.get(AjaxResult.DATA_TAG));
     }
 }

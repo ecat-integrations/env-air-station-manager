@@ -34,6 +34,18 @@
               }
             },
             {
+              "name": "device_control",
+              "path": "device_control",
+              "hidden": false,
+              "component": "views/AsmDeviceControl",
+              "meta": {
+                "title": "设备控制",
+                "icon": "switch",
+                "noCache": false,
+                "link": null
+              }
+            },
+            {
               "name": "history_data",
               "path": "history_data",
               "hidden": false,

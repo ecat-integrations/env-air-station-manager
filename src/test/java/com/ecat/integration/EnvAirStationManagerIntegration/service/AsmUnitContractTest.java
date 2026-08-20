@@ -109,4 +109,20 @@ class AsmUnitContractTest {
                 contract.resolveUnit(AsmUnitPurpose.STORAGE, "u", "a"));
         verify(mapper, times(2)).selectByLogicDevice("u");
     }
+
+    // ===== MONITOR 行 display_precision 供给（监控页修约三级链一级）=====
+
+    @Test
+    void monitorDisplayPrecision_fromMonitorRowAndCachedWithUnitRowSet() {
+        when(mapper.selectByLogicDevice("u")).thenReturn(Arrays.asList(
+                row("u", "temperature", "MONITOR", "TemperatureUnit.CELSIUS")));
+
+        AsmConfigUnit withPrecision = AsmConfigUnit.builder()
+                .logicDeviceUniqueId("u").attrId("co").purpose("MONITOR")
+                .unit("AirMassUnit.MGM3").displayPrecision(4).build();
+        when(mapper.selectByLogicDevice("u2")).thenReturn(Collections.singletonList(withPrecision));
+
+        assertEquals(null, contract.monitorDisplayPrecision("u", "temperature"));
+        assertEquals(Integer.valueOf(4), contract.monitorDisplayPrecision("u2", "co"));
+    }
 }

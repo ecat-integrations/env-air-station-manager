@@ -27,6 +27,9 @@ const STREAM_URL = '/asm-monitor/stream'
 /** SSE 事件帧名（后端 broadcast .name("device.data.update") 具名帧，onmessage 按 evt.event 字段匹配帧头）。 */
 const EVENT_DEVICE_DATA_UPDATE = 'device.data.update'
 
+/** 控制终态帧名（AsmControlService.finalizeOutcome 落终态经 broadcastNamed 推送，控制页帧驱动徽章）。 */
+const EVENT_CONTROL_COMPLETED = 'control.completed'
+
 /** 退避基数 1s，上限 30s（与 core-api event-api.js 同档，平衡重连压力与恢复速度）。 */
 const RECONNECT_BASE_MS = 1000
 const RECONNECT_MAX_MS = 30000
@@ -81,6 +84,8 @@ function defaultBaseUrlProvider() {
  *
  * 回调约定（调用方注入，默认 no-op）：
  *   - onUpdate(envelope)：收到 device.data.update 事件，envelope = {id, type, timestamp, payload:{...}}
+ *   - onControlCompleted(frame)：收到 control.completed 事件，frame = {id, uid, attrId, result, error}
+ *     （控制终态帧——设计 §4.1，控制页终态唯一来源，无轮询）
  *   - onOpen()：连接建立（重连成功也算，退避计数归零）
  *   - onError(error)：连接异常触发（已自动安排重连，回调仅用于 UI 提示）
  *
@@ -97,8 +102,9 @@ export class AsmMonitorSseClient {
    * @param {Function} [opts.tokenProvider]    token 取值函数（默认 readTokenFromCookie，单测注入替身）
    * @param {Function} [opts.baseUrlProvider]  baseURL 取值函数（默认 defaultBaseUrlProvider，单测注入替身）
    */
-  constructor({ onUpdate, onOpen, onError, tokenProvider, baseUrlProvider } = {}) {
+  constructor({ onUpdate, onControlCompleted, onOpen, onError, tokenProvider, baseUrlProvider } = {}) {
     this.onUpdate = onUpdate || (() => {})
+    this.onControlCompleted = onControlCompleted || (() => {})
     this.onOpen = onOpen || (() => {})
     this.onError = onError || (() => {})
     this.tokenProvider = tokenProvider || readTokenFromCookie
@@ -168,15 +174,18 @@ export class AsmMonitorSseClient {
         this.onOpen()
       },
       onmessage: (evt) => {
-        // fetch-event-source 的 onmessage 收所有帧（具名 + 无名），按 evt.event 字段过滤 device.data.update
-        // （后端 broadcast .name("device.data.update") 具名帧；EventSourceMessage.event 存帧名）。
-        // 不在此裁剪/校验 envelope 结构——上层（卡片/规则引擎）按需读字段，客户端只做透明转发。
-        if (evt.event !== EVENT_DEVICE_DATA_UPDATE) return
+        // fetch-event-source 的 onmessage 收所有帧（具名 + 无名），按 evt.event 字段分流：
+        // device.data.update（值增量）/ control.completed（控制终态，设计 §4.1）。
+        // 不在此裁剪/校验载荷结构——上层（卡片/规则引擎/executor）按需读字段，客户端只做透明转发。
+        let cb = null
+        if (evt.event === EVENT_DEVICE_DATA_UPDATE) cb = this.onUpdate
+        else if (evt.event === EVENT_CONTROL_COMPLETED) cb = this.onControlCompleted
+        if (!cb) return
         try {
-          this.onUpdate(JSON.parse(evt.data))
+          cb(JSON.parse(evt.data))
         } catch (e) {
           // JSON 解析失败：后端发的是非 JSON 或 JSON 畸形，记录原始数据便于排查（不抛——单帧坏不应杀整个连接）
-          console.error('[诊断调试] ASM SSE device.data.update 事件解析失败', e, evt && evt.data)
+          console.error('[诊断调试] ASM SSE ' + evt.event + ' 事件解析失败', e, evt && evt.data)
         }
       },
       onerror: (err) => {
