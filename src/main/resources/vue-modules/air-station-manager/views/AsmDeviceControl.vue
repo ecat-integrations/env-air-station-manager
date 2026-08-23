@@ -221,6 +221,22 @@ export default {
     undoCard(card) {
       undoCard(this.dirty, card.uid)
     },
+    // 终态权威 afterValue 归一化为 cmd.value 同形态（终态帧/SSE 重连补偿单查两路共用）：
+    // command/select 类 afterValue 是 displayValue 串（即 option label），按 cmd.options label 反查 key，
+    //   反查不到回退提交值（返回 null；严格模式不猜 key）；value_change/value 类去单位尾
+    //   （「27.0 °C」→「27.0」，按空格切首段）转数值串，非数值返回 null。
+    normalizeAuthoritative(uid, attrId, afterValue) {
+      if (afterValue == null) return null
+      const card = this.cards.find(c => c.uid === uid)
+      const cmd = card && card.commands.find(c => c.attributeId === attrId)
+      if (!cmd) return null
+      if (cmd.displayType === 'command' || cmd.displayType === 'select') {
+        const opt = (cmd.options || []).find(o => o.label === afterValue || o.value === afterValue)
+        return opt ? opt.value : null
+      }
+      const first = String(afterValue).split(' ')[0]
+      return isNaN(Number(first)) ? null : first
+    },
     startSse() {
       this.sseClient = new AsmMonitorSseClient({
         onUpdate: payload => this.handleSseUpdate(payload),
@@ -240,7 +256,8 @@ export default {
         if (frame && frame.uid && frame.attrId && frame.result) {
           setBadge(this.dirty, frame.uid, frame.attrId,
             frame.result === 'FAILED' ? 'FAILED' : frame.result,
-            frame.result === 'FAILED' ? (frame.error || '执行失败') : undefined)
+            frame.result === 'FAILED' ? (frame.error || '执行失败') : undefined,
+            this.normalizeAuthoritative(frame.uid, frame.attrId, frame.afterValue))
         }
       })
       this.sseClient.start()
@@ -266,7 +283,8 @@ export default {
           if (rec && rec.result && rec.result !== 'PENDING') {
             setBadge(this.dirty, it.uid, it.attrId,
               rec.result === 'FAILED' ? 'FAILED' : rec.result,
-              rec.result === 'FAILED' ? (rec.error || '执行失败') : undefined)
+              rec.result === 'FAILED' ? (rec.error || '执行失败') : undefined,
+              this.normalizeAuthoritative(it.uid, it.attrId, rec.afterValue))
           }
         } catch (e) { /* 单查失败保留 PENDING（executor 20s 兜底会落 TIMEOUT） */ }
       }

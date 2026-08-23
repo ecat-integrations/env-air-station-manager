@@ -14,6 +14,8 @@ import com.ecat.integration.EnvAirStationManagerIntegration.api.AirStationSdk;
 import com.ecat.integration.EnvAirStationManagerIntegration.consumer.AsmAlarmRuleConsumer;
 import com.ecat.integration.EnvAirStationManagerIntegration.consumer.AsmDataSampleConsumer;
 import com.ecat.integration.EnvAirStationManagerIntegration.consumer.AsmSseConsumer;
+import com.ecat.integration.EnvAirStationManagerIntegration.lifecycle.AsmChangeRecordHook;
+import com.ecat.integration.EnvAirStationManagerIntegration.mapper.AsmDeviceChangeRecordMapper;
 import com.ecat.integration.EnvAirStationManagerIntegration.mapper.AsmAlarmRecordMapper;
 import com.ecat.integration.EnvAirStationManagerIntegration.mapper.AsmDataSampleMapper;
 import com.ecat.integration.EnvAirStationManagerIntegration.rule.AsmAlarmRegistry;
@@ -24,7 +26,10 @@ import com.ecat.integration.EnvAirStationManagerIntegration.scheduler.AsmStatRef
 import com.ecat.integration.EnvAirStationManagerIntegration.service.AirStationSdkImpl;
 import com.ecat.integration.EnvAirStationManagerIntegration.service.AsmAlarmLifecycleService;
 import com.ecat.integration.EnvAirStationManagerIntegration.service.AsmControlService;
+import com.ecat.integration.EnvAirStationManagerIntegration.profile.StationProfileRegistrar;
+import com.ecat.integration.EnvAirStationManagerIntegration.profile.StationProvisionProfileRegistry;
 import com.ecat.integration.EnvAirStationManagerIntegration.service.AsmSeedService;
+import com.ecat.integration.EnvAirStationManagerIntegration.service.StationDeviceBindingService;
 import com.ecat.integration.EnvAirStationManagerIntegration.service.AsmStatPartitionManager;
 import com.ecat.integration.EnvAirStationManagerIntegration.service.AsmUnitContract;
 import com.ecat.integration.EnvAirStationManagerIntegration.sse.AsmSseBroadcaster;
@@ -89,6 +94,7 @@ public class EnvAirStationManagerIntegration extends IntegrationBase {
             throw new IllegalStateException("加载 air-station-manager jar/vue 到 ruoyi 失败", e);
         }
         wireAsmPipeline();
+        wireStationDeviceConfig();
         log.info("{} integration started", getName());
     }
 
@@ -155,6 +161,19 @@ public class EnvAirStationManagerIntegration extends IntegrationBase {
                 + "，asm-sse consumer 已订阅（总览页 SSE 实时推送）"
                 + "（type=8 等联动经 AsmControlService 审计收口）",
                 topic, seeded);
+    }
+
+    /**
+     * 站房设备配置管理装配（复刻 ADM）：① profile 全矩阵注册（厂商列表唯一来源）；
+     * ② 追溯钩子注入 StationDeviceBindingService（5 事件落 asm_device_change_record）。
+     * 均为静态配置/Bean 注入，无 consumer 须收口（onPause/onRelease 不需反向处理）。
+     */
+    private void wireStationDeviceConfig() {
+        new StationProfileRegistrar(StationProvisionProfileRegistry.getInstance()).registerAll();
+        mry.getSpringBean(StationDeviceBindingService.class)
+                .setChangeRecordHook(new AsmChangeRecordHook(
+                        mry.getSpringBean(AsmDeviceChangeRecordMapper.class)));
+        log.info("[诊断调试] ASM 站房设备配置管理已装配：profile 矩阵已注册，变更追溯钩子已注入");
     }
 
     /**

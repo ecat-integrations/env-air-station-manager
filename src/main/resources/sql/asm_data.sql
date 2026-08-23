@@ -149,11 +149,16 @@ CREATE INDEX IF NOT EXISTS idx_asm_compute_log_window ON asm_stat_compute_log (g
 CREATE INDEX IF NOT EXISTS idx_asm_compute_log_started ON asm_stat_compute_log (started_at DESC);
 COMMENT ON TABLE asm_stat_compute_log IS 'ASM 物化执行审计(逐粒度一行);trigger_source 触发源/window 覆盖窗/bucket_count 摘要/status+error 追溯失败;排障第一入口';
 
--- ===== 压缩策略（raw 7 天；stat 月度裸分区不压缩）=====
+-- ===== 压缩策略（raw 1 天；stat 月度裸分区不压缩）=====
+-- 2026-08-23 窗口 7 天→1 天（用户定案）：站房设备轮询密度高（日增 ~1.2GB/3450 万行环境实测），
+-- 7 天才压导致磁盘裸奔。压缩为列存后透明可读/可聚合（达龄 4 chunk 5445MB→140MB，压至 2.6%），
+-- 物化引擎读压缩区不受影响。注意本段幂等语义：仅在「无策略」的新库上建 1 天窗口；
+-- 已有旧窗口的库要改窗口须 remove_compression_policy + add 重挂（add 无 if_not_exists，
+-- 云库 2026-08-23 已手动重挂为 1 天，job 1046）。
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM timescaledb_information.jobs WHERE proc_name = 'policy_compression' AND hypertable_name = 'asm_data_sample') THEN
-    PERFORM add_compression_policy('asm_data_sample', INTERVAL '7 days');
+    PERFORM add_compression_policy('asm_data_sample', INTERVAL '1 day');
   END IF;
 END $$;
 
@@ -252,3 +257,26 @@ COMMENT ON TABLE asm_control_record IS 'ASM 控制审计;先落 PENDING(before/r
 INSERT INTO asm_alarm_rule (alarm_type, severity, setting_content, sort) VALUES
 ('8', '1', '{"name":"标准气体泄漏","description":"标气泄漏检测浓度超阈值触发并联动开排风扇","icon":"FlaskConical","category":"gas","enabled":true,"configurable":true,"device_info":{"logicdevice_station.standard_gas.co":["gas_leak_data"],"logicdevice_station.standard_gas.nox":["gas_leak_data"],"logicdevice_station.standard_gas.so2":["gas_leak_data"]},"configs":[{"label":"泄漏检测浓度阈值 (ppm)","type":"number","class":"gas_leak_data","value":50,"compare":"gt"},{"type":"setting","device_id":"logicdevice_station.exhaust_fan","param_id":"speed","value":"high"}]}', 120)
 ON CONFLICT (alarm_type) DO NOTHING;
+
+-- ===== P? 站房设备变更追溯 asm_device_change_record（设备配置管理复刻 ADM，append-only 审计流水）=====
+-- eventType 5 种:FIRST_BIND/REBIND/REPLACE/UNBIND/RECONFIGURE;仅 REPLACE 填 prev_physical_device_unique_id。
+-- logic_device_unique_id 前缀 logicdevice_station.（ASM 类型槽）。append-only:无 updated_at(只 created_at)。
+CREATE TABLE IF NOT EXISTS asm_device_change_record
+(
+    id                             BIGSERIAL    PRIMARY KEY,
+    logic_device_unique_id         varchar(128) NOT NULL,
+    attr_id                        varchar(64)  NOT NULL,
+    event_type                     varchar(32)  NOT NULL,          -- FIRST_BIND/REBIND/REPLACE/UNBIND/RECONFIGURE
+    physical_device_unique_id      varchar(64),                     -- 变更后物理设备 uniqueId;UNBIND 时 NULL
+    prev_physical_device_unique_id varchar(64),                     -- 变更前物理设备 uniqueId;仅 REPLACE 有值
+    vendor                         varchar(64),                     -- 厂商(如 saimosen);固化审计避免后续改 entry 失真
+    model                          varchar(64),                     -- 型号(如 SMS8910V2)
+    serial_number                  varchar(64),                     -- 序列号
+    change_summary                 text,                            -- 变更摘要(人类可读一句话)
+    operator                       varchar(64),                     -- 操作者(用户名/系统标识)
+    occurred_at                    timestamptz  NOT NULL,           -- 变更发生时间(业务时间,独立于 created_at 入库时间)
+    created_at                     timestamptz  NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_asm_change_logic_attr_time
+    ON asm_device_change_record (logic_device_unique_id, attr_id, occurred_at DESC);
+COMMENT ON TABLE asm_device_change_record IS 'ASM 站房设备变更追溯(append-only 审计);occurred_at 业务时间;仅 REPLACE 填 prev_physical_device_unique_id;无 updated_at';

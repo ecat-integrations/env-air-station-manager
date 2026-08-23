@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.ecat.integration.EnvAirStationManagerIntegration.mapper.AsmDeviceChangeRecordMapper">
+
+    <!-- 站房设备变更追溯（append-only 审计）。时间列 timestamptz 走 TimestamptzInstantTypeHandler；type FQCN。 -->
+    <resultMap type="com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmDeviceChangeRecord" id="AsmDeviceChangeRecordResult">
+        <id     property="id"                          column="id"/>
+        <result property="logicDeviceUniqueId"         column="logic_device_unique_id"/>
+        <result property="attrId"                      column="attr_id"/>
+        <result property="eventType"                   column="event_type"/>
+        <result property="physicalDeviceUniqueId"      column="physical_device_unique_id"/>
+        <result property="prevPhysicalDeviceUniqueId"  column="prev_physical_device_unique_id"/>
+        <result property="vendor"                      column="vendor"/>
+        <result property="model"                       column="model"/>
+        <result property="serialNumber"                column="serial_number"/>
+        <result property="changeSummary"               column="change_summary"/>
+        <result property="operator"                    column="operator"/>
+        <result property="occurredAt"                  column="occurred_at" typeHandler="com.ecat.integration.EnvAirStationManagerIntegration.support.TimestamptzInstantTypeHandler"/>
+        <result property="createdAt"                   column="created_at" typeHandler="com.ecat.integration.EnvAirStationManagerIntegration.support.TimestamptzInstantTypeHandler"/>
+    </resultMap>
+
+    <sql id="cols">
+        id, logic_device_unique_id, attr_id, event_type, physical_device_unique_id,
+        prev_physical_device_unique_id, vendor, model, serial_number, change_summary,
+        operator, occurred_at, created_at
+    </sql>
+
+    <!-- 追溯钩子写入；id 自增回填。无 updated_at（append-only） -->
+    <insert id="insert" parameterType="com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmDeviceChangeRecord"
+            useGeneratedKeys="true" keyProperty="id" keyColumn="id">
+        insert into asm_device_change_record
+            (logic_device_unique_id, attr_id, event_type, physical_device_unique_id,
+             prev_physical_device_unique_id, vendor, model, serial_number, change_summary,
+             operator, occurred_at, created_at)
+        values
+            (#{logicDeviceUniqueId}, #{attrId}, #{eventType}, #{physicalDeviceUniqueId},
+             #{prevPhysicalDeviceUniqueId}, #{vendor}, #{model}, #{serialNumber}, #{changeSummary},
+             #{operator}, #{occurredAt, typeHandler=com.ecat.integration.EnvAirStationManagerIntegration.support.TimestamptzInstantTypeHandler}, now())
+    </insert>
+
+    <!-- 列表查询：按 (logic_device, attr) + occurred_at 时间段过滤，分页由 controller startPage -->
+    <select id="selectList" resultMap="AsmDeviceChangeRecordResult">
+        select <include refid="cols"/> from asm_device_change_record
+        <where>
+            <if test="logicDeviceUniqueId != null and logicDeviceUniqueId != ''">
+                and logic_device_unique_id = #{logicDeviceUniqueId}
+            </if>
+            <if test="attrId != null and attrId != ''">
+                and attr_id = #{attrId}
+            </if>
+            <if test="beginTime != null and endTime != null">
+                and occurred_at between #{beginTime, typeHandler=com.ecat.integration.EnvAirStationManagerIntegration.support.TimestamptzInstantTypeHandler} and #{endTime, typeHandler=com.ecat.integration.EnvAirStationManagerIntegration.support.TimestamptzInstantTypeHandler}
+            </if>
+        </where>
+        order by occurred_at desc
+    </select>
+</mapper>

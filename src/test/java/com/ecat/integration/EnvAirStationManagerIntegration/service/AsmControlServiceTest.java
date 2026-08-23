@@ -324,6 +324,9 @@ class AsmControlServiceTest {
         verify(broadcaster).broadcastNamed(eq(AsmControlCompletedEvent.TYPE), contains("\"result\":\"SUCCESS\""));
         verify(broadcaster).broadcastNamed(eq(AsmControlCompletedEvent.TYPE),
                 contains("\"uid\":\"logicdevice_station.th\""));
+        // SUCCESS 终态帧带权威 afterValue（=审计 after_value，attr 可读状态此时已是新值）
+        verify(broadcaster).broadcastNamed(eq(AsmControlCompletedEvent.TYPE),
+                contains("\"afterValue\":\"30.0 " + TemperatureUnit.CELSIUS + "\""));
     }
 
     @Test
@@ -338,6 +341,8 @@ class AsmControlServiceTest {
         timeoutScheduler.fireAll();
 
         verify(broadcaster).broadcastNamed(eq(AsmControlCompletedEvent.TYPE), contains("\"result\":\"TIMEOUT\""));
+        // TIMEOUT 不猜结果：帧 afterValue 恒 null
+        verify(broadcaster).broadcastNamed(eq(AsmControlCompletedEvent.TYPE), contains("\"afterValue\":null"));
     }
 
     @Test

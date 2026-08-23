@@ -11,13 +11,13 @@
 import { reactive } from 'vue'
 
 /**
- * settled 收敛保持上限（用户定案 10s）。
- * 背景：SUCCESS=物理写入被接受，≠逻辑 attr 可读状态已翻转——逻辑状态靠物理下个轮询回报
- * → SSE 数据帧到达，显示才收敛。finishSubmit 立即清 pending 会让显示回落尚未收敛的 live 旧值
- * （用户看到 开→成功✓→关→开 回跳）。SUCCESS 后用 settled 钉住提交值直到帧到达收敛。
- * 数据帧理论上必到（轮询持续回报），此上限仅兜底防病态滞留（如 SSE 长断连）。
+ * settled 兜底窗上限（3s）。
+ * 已实现「帧到即收敛」：control.completed 终态帧带权威 afterValue（SUCCESS 时 core attr 可读状态
+ * 必为新值——数值型乐观更新 / Command 型 ACK 后同步更新），SUCCESS 落 settled 即用权威值，无回跳。
+ * 本窗仅兜防迟到旧值数据帧——设备周期 poll 与写传播竞态会短暂回报旧值（实测 SUCCESS 后
+ * 150ms 内即有旧值帧到达），3s 覆盖一个轮询周期足够；过期后恢复跟随 live。
  */
-export const SETTLED_MAX_MS = 10000
+export const SETTLED_MAX_MS = 3000
 
 /** 建 dirty store（页面级单例，reactive 驱动 Vue 渲染）。 */
 export function createDirtyStore() {
@@ -86,12 +86,14 @@ export function beginSubmit(store, uid, items) {
 }
 
 /** 单项终态徽章（SUCCESS / FAILED(error 必填) / TIMEOUT）。
- *  SUCCESS 且该 attr 本批次提交过 → 记 settled 钉住提交值（收敛模型，见 SETTLED_MAX_MS）；
+ *  SUCCESS 且该 attr 本批次提交过 → 记 settled：优先用 authoritativeValue（终态帧/单查携带的
+ *  权威 afterValue，已归一化为 cmd.value 同形态），解析失败回退 lastSubmitted（见 SETTLED_MAX_MS）；
  *  FAILED/TIMEOUT 不记（回落 live）。 */
-export function setBadge(store, uid, attrId, state, error) {
+export function setBadge(store, uid, attrId, state, error, authoritativeValue) {
   cardMap(store, 'badge', uid)[attrId] = state === 'FAILED' ? { state, error: error || '执行失败' } : { state }
   if (state === 'SUCCESS') {
-    const v = store.lastSubmitted[uid] && store.lastSubmitted[uid][attrId]
+    const v = authoritativeValue != null ? String(authoritativeValue)
+      : (store.lastSubmitted[uid] && store.lastSubmitted[uid][attrId])
     if (v != null) cardMap(store, 'settled', uid)[attrId] = { value: String(v), deadline: Date.now() + SETTLED_MAX_MS }
   }
 }

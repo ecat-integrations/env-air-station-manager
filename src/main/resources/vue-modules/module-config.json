@@ -34,6 +34,18 @@
               }
             },
             {
+              "name": "station_device",
+              "path": "station_device",
+              "hidden": false,
+              "component": "views/StationDevicePanel",
+              "meta": {
+                "title": "设备配置",
+                "icon": "tree",
+                "noCache": false,
+                "link": null
+              }
+            },
+            {
               "name": "device_control",
               "path": "device_control",
               "hidden": false,

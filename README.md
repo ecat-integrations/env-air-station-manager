@@ -25,12 +25,20 @@
 - **在线判定**：`AsmOnlineJudge`——online_status attr 优先，兜底取**最新**参数时间戳（任一参数 60s 内更新=在线）。
 - **设备控制入口**：详情抽屉顶部状态行「设备控制」按钮——显隐唯一判定源 = 前端常量 `control/constants.js` 的 `CONTROLLABLE_TYPES`（空调/灯光/排风扇/门禁/采样管/稳压电源 6 类型；增删受控类型改常量，须与 DM `env_device_settings` 配置保持同步）。
 
+## 设备配置页（station_device，2026-08-21）
+
+- **结构**（照 ADM air_device 四组件）：左 sidebar 37 类型槽（22 类型，多实例类型逐槽）分组全景 + 已配置 ✓ 徽标；右 Detail 三态状态机（未配置→「配置设备」蓝钮；已配置→更换设备/修改配置/移除）；复用弹窗（add/replace，当前台标灰，底部「+配置新设备」常驻）；配置向导（vendor 选型 + lit `<flow-form>` schema 驱动步进，CREATE_ENTRY 后端原子收口，前端只关弹窗刷新）。
+- **后端契约**：`/asm-monitor/device/*` 11 端点（读 `asm-monitor:device:list` / 写 `asm-monitor:device:edit`），三态纯读 registry；provision→submit→CREATE_ENTRY 原子收口+失败回滚；变更审计落 `asm_device_change_record`（FIRST_BIND/REBIND/REPLACE/UNBIND/RECONFIGURE，append-only）。设计真相源 `docs/design/2026-08-21-asm-station-device-config.md`。
+- **启动装载门控**：airstation logic 设备就绪前显骨架横幅（轮询 snapshot 非空），勿把 registry 空渲染成「全部未配置」。
+- **前端元数据**：`stationParamMeta.js` 37 槽 label/分组（与后端 StationParamMeta 枚举名 join）；槽列表/绑定状态动态取 `GET /device/params`。
+- **config-flow lit lib**：`static/lib/config-flow`（webpack CopyPlugin 进 `dist/lib/config-flow/`），Dialog 从本集成 bundle script tag 反推 publicPath 加载。
+
 ## 设备控制页（device_control，2026-08-20）
 
 - **范围**：DM `GET /device/control/settings` 配置驱动的 7 台站房设备（每类设备显示定制一个 js：`control/devices/`），element-plus 5 种 displayType 渲染（`control/renderers/`）；`?focus={uid}` 锚点滚动+高亮。
 - **数据流（纯流式）**：加载仅两次查询（snapshot + DM settings），此后值变化走 SSE `device.data.update` 帧、控制终态走 SSE **`control.completed`** 帧（`AsmControlService.finalizeOutcome` → `AsmSseBroadcaster.broadcastNamed`），零轮询；SSE 断连中禁「确认」，重连一次性补偿（snapshot 重拉 + 在途项 `GET /asm-monitor/control/{id}` 单查）。
 - **交互模型**：per-card 修改出「确认/撤销」（确认=串行逐 attr POST /control，行内徽章 PENDING→SUCCESS/FAILED/TIMEOUT）；dirty 字段不被 SSE 帧覆盖（其他渠道控制实时反映）；门禁 stateless 命令纳入统一待执行模型（primary+对勾角标）。
-- **settled 收敛模型**：SUCCESS=物理写入被接受 ≠ 逻辑 attr 可读状态已翻转（实测 SUCCESS 后 ~150ms 内有携带旧值的帧到达）——SUCCESS 后 `settled[uid][attrId]` 钉住提交值（`SETTLED_MAX_MS=10s` 常量兜底），收敛窗内不同值帧判迟到旧帧忽略、同值帧=收敛交还 live；显示优先级 `pending → settled → live`。批次徽章生命周期：beginSubmit 清整卡旧徽章。
+- **settled 收敛模型**：`control.completed` 终态帧带权威 `afterValue`（SUCCESS 时 core attr 可读状态必为新值——数值型乐观更新 / Command 型 ACK 后同步更新，快照即权威值），前端归一化为 cmd.value 同形态后作 settled 值，「帧到即收敛」无回跳；`SETTLED_MAX_MS=3s` 仅兜底防迟到旧值 poll 帧（写传播与设备轮询竞态的实证场景），窗内不同值帧判迟到旧帧忽略、同值帧=收敛交还 live；显示优先级 `pending → settled → live`。批次徽章生命周期：beginSubmit 清整卡旧徽章。
 
 ## 报警记录生命周期（episode 心跳窗）
 

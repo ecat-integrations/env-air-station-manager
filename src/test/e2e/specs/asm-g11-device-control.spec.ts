@@ -7,12 +7,13 @@
  *  - G11-3 7 张 card 渲染 + 每卡控件项数（按 DM 配置：空调4×2 / 灯光1 / 排风扇1 / 门禁2 / 采样管2 / 稳压4）
  *  - G11-4 修改出「确认/撤销」→ 撤销恢复最新值（按钮消失）
  *  - G11-5 确认串行提交 + 终态徽章（setpoint_temp 设当前值 = SUCCESS 确定性）+ asm_control_record 有 REMOTE 行
- *  - G11-6 动态刷新 + dirty 保护：core-api 旁路直写物理空调 setpoint（非 dirty 跟随 SSE），
+ *  - G11-6 动态刷新 + dirty 保护：core-api 旁路写站房空调逻辑 attr setpoint（非 dirty 跟随 SSE），
  *          同时 fan_speed 处于 dirty（帧不覆盖用户改动）
  *
- * 物理空调设备定位：core-api devices 全列表中 attrs 恰含 {setpoint_temp,power_status,fan_speed,running_mode}
- * 的设备（本环境 2 台），按 power_status（开/关）对位 DM settings 里 ac1/ac2 的 power key。
- * 测试数据用后还原（setpoint/fan_speed 物理值 + 页面 dirty 撤销）。
+ * 站房空调定位（2026-08-21 修正，bugs/bug-record-20260821-072500）：registry 设备按 uniqueId
+ * 精确对位 ac1/ac2（原实现按 attr 集合+power 态对位——匹配到的本就是逻辑设备且双开即歧义）。
+ * 「core-api 旁路写」语义 = 不经 ASM REST 的其他渠道写（写逻辑 attr），验证页面经 SSE 跟随；
+ * 真实物理后端（如 szzht RACC2）不在此层断言。测试数据用后还原（setpoint/fan_speed + 页面 dirty 撤销）。
  */
 import { test, expect, Page } from '@playwright/test';
 import { AsmBasePage, ASM_ROUTE_BASE } from '../helpers/page-objects/AsmBasePage';
@@ -49,29 +50,34 @@ async function fetchDmSettings(auth: string): Promise<any[]> {
   return r.rows;
 }
 
-/** 物理空调设备定位：attrs 恰含四件套；返回 { ac1: deviceId, ac2: deviceId, fanKeyByUid }。 */
-async function locatePhysicalAcs(token: string, dmRows: any[]) {
+/** 站房空调逻辑设备定位（registry 设备）：唯一精确——deviceId 扫列表按 uniqueId 对位。
+ *  勿按 attr 集合匹配（会命中同名逻辑设备后仍需二次对位）；勿按 power 态对位（双开/双关即歧义，
+ *  2026-08-21 实际翻车：两台同开 → find 两次命中同一台 → 写 A 断言 B 必挂，见 bugs/bug-record-20260821-072500）。
+ *  语义注：本用例的「core-api 旁路写」写的就是逻辑 attr（不经 ASM REST=其他渠道），模拟的是
+ *  其他渠道控制后页面经 SSE 跟随——真实物理后端（如 szzht RACC2 ac_set_temp）不在此层断言。 */
+async function locateStationAcs(token: string) {
   const devs = await fetch(`${CORE}/core-api/devices`, { headers: { Authorization: `Bearer ${token}` } })
     .then(r => r.json()).then(j => j.data || []);
-  const need = ['setpoint_temp', 'power_status', 'fan_speed', 'running_mode'];
-  const cands: Array<{ id: string; power: string; fan: string; setpoint: string }> = [];
-  for (const d of devs) {
-    const id = d.deviceId || d.id;
+  const byUid = (uid: string) => devs.find((d: any) => (d.uniqueId || '') === uid);
+  const idOf = (uid: string) => {
+    const d = byUid(uid);
+    expect(d, `registry 应有站房空调逻辑设备 ${uid}`).toBeTruthy();
+    return (d.deviceId || d.id) as string;
+  };
+  const ac1Id = idOf(AC1);
+  const ac2Id = idOf(AC2);
+  expect(ac1Id && ac2Id && ac1Id !== ac2Id, 'ac1/ac2 应为两台不同设备').toBeTruthy();
+  const readAttr = async (id: string, attrId: string) => {
     const attrs = await fetch(`${CORE}/core-api/devices/${id}/attributes`, { headers: { Authorization: `Bearer ${token}` } })
-      .then(r => r.json()).then(j => j.data || []).catch(() => []);
-    const ids = new Set(attrs.map((a: any) => a.attributeID));
-    if (!need.every(n => ids.has(n))) continue;
-    const get = (k: string) => attrs.find((a: any) => a.attributeID === k);
-    cands.push({ id, power: get('power_status').displayValue, fan: get('fan_speed').displayValue, setpoint: get('setpoint_temp').displayValue });
-  }
-  expect(cands.length, '物理空调应恰有 2 台').toBe(2);
-  // 对位：DM ac1/ac2 的 power key（on/off）↔ 物理 displayValue（开/关）
-  const powerOf = (uid: string) => dmRows.find(r => r.deviceId === uid).commandList.find((c: any) => c.attributeId === 'power_status').value;
-  const map = (key: string) => (key === 'on' ? '开' : '关');
-  const ac1 = cands.find(c => c.power === map(powerOf(AC1)));
-  const ac2 = cands.find(c => c.power === map(powerOf(AC2)));
-  expect(ac1 && ac2, `ac1/ac2 物理设备应可对位（cands=${JSON.stringify(cands)}）`).toBeTruthy();
-  return { ac1, ac2 };
+      .then(r => r.json()).then(j => j.data || []);
+    const a = attrs.find((x: any) => x.attributeID === attrId);
+    expect(a, `设备 ${id} 应有 attr ${attrId}`).toBeTruthy();
+    return a.displayValue;
+  };
+  return {
+    ac1: { id: ac1Id, setpoint: await readAttr(ac1Id, 'setpoint_temp'), fan: await readAttr(ac1Id, 'fan_speed') },
+    ac2: { id: ac2Id, setpoint: await readAttr(ac2Id, 'setpoint_temp'), fan: await readAttr(ac2Id, 'fan_speed') },
+  };
 }
 
 /** core-api 旁路直写物理 attr（PUT value，202 异步）。写后轮询源侧 currentValue 直到落地
@@ -241,7 +247,7 @@ test('G11-6 动态刷新 + dirty 保护（core-api 旁路直写物理空调） @
   const coreTok = await loginCore();
   const auth = await loginRuoYi();
   const dmRows = await fetchDmSettings(auth);
-  const { ac2 } = await locatePhysicalAcs(coreTok, dmRows);
+  const { ac2 } = await locateStationAcs(coreTok);
   await gotoControlPage(page);
   const c = card(page, AC2);
 

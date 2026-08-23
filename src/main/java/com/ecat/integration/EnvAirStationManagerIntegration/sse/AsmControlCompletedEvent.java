@@ -31,4 +31,11 @@ public class AsmControlCompletedEvent {
 
     /** 失败原因（仅 FAILED 非 null；成功/超时为 null）。 */
     String error;
+
+    /**
+     * 终态时刻的权威显示值快照（displayValue + 单位，同审计 after_value）。
+     * core attr 语义保证：SUCCESS 终态时 attr 可读状态必为新值（数值型乐观更新 AttributeBase / Command 型 ACK 后同步更新），
+     * 故该快照即权威值，前端「帧到即收敛」免回跳。TIMEOUT 不猜结果（既有设计），恒 null。
+     */
+    String afterValue;
 }

@@ -1,5 +1,5 @@
 -- ASM 鉴权权限行（P5a，结构对齐 ADM adm_auth.sql）：
--- env-air-station-manager 全部 controller 逐方法 @PreAuthorize 的权限 key（9 个 asm-monitor:*）。
+-- env-air-station-manager 全部 controller 逐方法 @PreAuthorize 的权限 key。
 -- 落 ruoyi sys_menu（perm 管理用；菜单显示由动态 jar module-config.json 负责，故本处仅建隐藏父目录 + F 按钮 perms）。
 -- 库：ruoyi 主库（PostgreSQL）public schema。app 不自动跑；运维执行，幂等（DO 块守卫，可重跑）。
 -- admin 角色（role_id=1）授予全部 asm-monitor:* —— admin 用户(user_id=1)持 *:*:* 通配本就全过，
@@ -45,7 +45,9 @@ BEGIN
         'asm-monitor:controlRecord:list',
         'asm-monitor:statParams:list',
         'asm-monitor:config:read',
-        'asm-monitor:config:edit'
+        'asm-monitor:config:edit',
+        'asm-monitor:device:list',
+        'asm-monitor:device:edit'
     ] LOOP
         IF NOT EXISTS (SELECT 1 FROM sys_menu WHERE perms = p) THEN
             mid := (SELECT coalesce(max(menu_id), 0) + 1 FROM sys_menu);

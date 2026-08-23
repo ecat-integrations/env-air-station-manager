@@ -235,7 +235,7 @@ public class AsmControlService {
             broadcaster.broadcastNamed(AsmControlCompletedEvent.TYPE,
                     objectMapper.writeValueAsString(new AsmControlCompletedEvent(
                             record.getId(), record.getLogicDeviceUniqueId(), record.getAttrId(),
-                            record.getResult(), record.getError())));
+                            record.getResult(), record.getError(), record.getAfterValue())));
         } catch (Exception e) {
             log.debug("[诊断调试] 控制终态帧广播失败（不影响审计落库）id=" + record.getId()
                     + "：" + e);

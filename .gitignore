@@ -9,4 +9,5 @@ dist/
 node_modules/
 
 # e2e 截图输出目录（g4-screenshots.ts 产物，人工核验用不入库）
-docs/screenshots/
+docs/
+test-results/
