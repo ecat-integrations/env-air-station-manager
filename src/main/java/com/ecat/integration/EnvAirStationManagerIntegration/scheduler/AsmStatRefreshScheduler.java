@@ -11,11 +11,12 @@ import org.springframework.stereotype.Service;
 import javax.annotation.PreDestroy;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.concurrent.Executors;
+import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * ASM 三粒度定时物化调度器（机制同 ADM AdmStatRefreshScheduler，三级无 day）。
@@ -31,8 +32,13 @@ import java.util.concurrent.atomic.AtomicInteger;
  * </table></p>
  *
  * <p><b>scheduledTick 必 catch</b>：{@code scheduleAtFixedRate} task 抛未捕获异常则该 task 后续全抑制——
- * {@link #tick} 包 try/catch（失败记 error 后吞，物化幂等下个周期续算）。<b>start() 幂等</b>（synchronized + started）。
- * {@code shutdown()} 关自建 executor（测试注入的 executor 不关，测试自管）。</p>
+ * {@link #tick} 包 try/catch（失败记 error 后吞，物化幂等下个周期续算）。<b>start() 幂等</b>（synchronized + started）。</p>
+ *
+ * <p><b>车道登记（计时归 biz 池+HostedExecutors 工作道）</b>：
+ * 生产 executor 退役自建 3 线程池，周期任务经 {@link AsmLanes#resolve()} 登记——计时挂集成
+ * 业务计时器（biz 池），到点 tick 只投递；工作体进模块单飞道（三粒度 tick 同道 FIFO 互斥）。
+ * 计时器/工作道无独立生命周期（工作道拆卸挂集成 onRemove），{@code shutdown()} 逐个 cancel
+ * 自持的 {@link ScheduledFuture}（测试注入的 executor 测试自管）。</p>
  *
  * @author coffee
  */
@@ -51,36 +57,37 @@ public class AsmStatRefreshScheduler {
     private final Log log = LogFactory.getLogger(getClass());
 
     private final AsmStatAggregationEngine engine;
-    private final ScheduledExecutorService executor;
-    private final boolean ownsExecutor;
+    private final AsmLanes.Lane lane;
     private final int minuteDelaySeconds;
     private final int fiveMinDelaySeconds;
     private final int hourDelaySeconds;
 
+    /** 已 arm 的周期 task future（计时器/工作道无独立生命周期，取消靠自持 future 逐个 cancel）。 */
+    private final List<ScheduledFuture<?>> armedTasks = new CopyOnWriteArrayList<>();
+
     private volatile boolean started = false;
 
-    /** 生产构造：@Service 注入 + @Value 读 delay 配置，自建 3 线程命名守护线程池。 */
+    /** 生产构造：@Service 注入 + @Value 读 delay 配置；周期任务登记 module:asm 车道（biz 池计时+单飞道串行）。 */
     @Autowired
     public AsmStatRefreshScheduler(AsmStatAggregationEngine engine,
                                    @Value("${asm.stat.minute-delay-seconds:10}") int minuteDelaySeconds,
                                    @Value("${asm.stat.five-min-delay-seconds:30}") int fiveMinDelaySeconds,
                                    @Value("${asm.stat.hour-delay-seconds:180}") int hourDelaySeconds) {
-        this(engine, Executors.newScheduledThreadPool(3, namedThreadFactory("asm-stat-refresh")),
-                true, minuteDelaySeconds, fiveMinDelaySeconds, hourDelaySeconds);
+        this(engine, AsmLanes.resolve(),
+                minuteDelaySeconds, fiveMinDelaySeconds, hourDelaySeconds);
     }
 
-    /** 测试构造（默认 delay）：注入 mock/虚拟 executor 捕获 task 手动 run()，无 sleep；不拥有 executor。 */
-    AsmStatRefreshScheduler(AsmStatAggregationEngine engine, ScheduledExecutorService executor) {
-        this(engine, executor, false,
+    /** 测试构造（默认 delay）：注入 mock 计时 executor 捕获 task 手动 run() + 工作道，无 sleep；不拥有任一 executor。 */
+    AsmStatRefreshScheduler(AsmStatAggregationEngine engine,
+                            ScheduledExecutorService executor, ExecutorService workLane) {
+        this(engine, AsmLanes.laneOf(executor, workLane),
                 MINUTE_DELAY_SECONDS_DEFAULT, FIVE_MIN_DELAY_SECONDS_DEFAULT, HOUR_DELAY_SECONDS_DEFAULT);
     }
 
-    private AsmStatRefreshScheduler(AsmStatAggregationEngine engine, ScheduledExecutorService executor,
-                                    boolean ownsExecutor, int minuteDelaySeconds, int fiveMinDelaySeconds,
-                                    int hourDelaySeconds) {
+    AsmStatRefreshScheduler(AsmStatAggregationEngine engine, AsmLanes.Lane lane,
+                            int minuteDelaySeconds, int fiveMinDelaySeconds, int hourDelaySeconds) {
         this.engine = engine;
-        this.executor = executor;
-        this.ownsExecutor = ownsExecutor;
+        this.lane = lane;
         this.minuteDelaySeconds = minuteDelaySeconds;
         this.fiveMinDelaySeconds = fiveMinDelaySeconds;
         this.hourDelaySeconds = hourDelaySeconds;
@@ -106,7 +113,12 @@ public class AsmStatRefreshScheduler {
     /** 注册单粒度 task：对齐 period 下个边界 + delay 后首触发，之后按 period 固定速率。 */
     private void scheduleTask(AsmStatGranularity gran, Duration period, int delaySeconds, Duration window) {
         long initialDelaySec = secondsToNextBoundary(period, Instant.now()) + delaySeconds;
-        executor.scheduleAtFixedRate(() -> tick(gran, window), initialDelaySec, period.getSeconds(), TimeUnit.SECONDS);
+        armedTasks.add(lane.atFixedRate(() -> tick(gran, window), initialDelaySec, period.getSeconds(), TimeUnit.SECONDS));
+    }
+
+    /** 已 arm 的周期 task（包级可见供单测断言 cancel 语义）。 */
+    List<ScheduledFuture<?>> armedTasks() {
+        return armedTasks;
     }
 
     /**
@@ -130,22 +142,15 @@ public class AsmStatRefreshScheduler {
         return nextBoundarySec - nowSec;
     }
 
-    /** 模块卸载/暂停释放自建线程池（注入的测试 executor 不关）；幂等。 */
+    /** 模块卸载/暂停：逐个 cancel 自持 future（计时器/工作道不停——工作道拆卸挂集成
+     * onRemove sweep，永不注销原则下重 arm 走 start）。幂等。 */
     @PreDestroy
     public void shutdown() {
-        if (ownsExecutor && executor != null) {
-            executor.shutdownNow();
-            log.info("[诊断调试] ASM 物化调度器已关闭");
+        int cancelled = armedTasks.size();
+        for (ScheduledFuture<?> task : armedTasks) {
+            task.cancel(false);
         }
-    }
-
-    /** 命名守护线程工厂（线程名 asm-stat-refresh-N；daemon 防 JVM 退出阻塞）。 */
-    private static ThreadFactory namedThreadFactory(String prefix) {
-        AtomicInteger counter = new AtomicInteger(0);
-        return r -> {
-            Thread t = new Thread(r, prefix + "-" + counter.incrementAndGet());
-            t.setDaemon(true);
-            return t;
-        };
+        armedTasks.clear();
+        log.info("[诊断调试] ASM 物化调度器已关闭（{} 个周期 task 已 cancel）", cancelled);
     }
 }

@@ -7,6 +7,7 @@ import com.ecat.core.Bus.BusTopic;
 import com.ecat.core.Bus.consumer.BusConsumerBase;
 import com.ecat.core.Bus.event.DeviceDataChangedEvent;
 import com.ecat.core.Integration.IntegrationBase;
+import com.ecat.core.Task.runner.HostedExecutors;
 import com.ecat.core.Utils.Log;
 import com.ecat.core.Utils.LogFactory;
 import com.ecat.integration.EcatCoreRuoyiIntegration.EcatCoreRuoyiIntegration;
@@ -22,6 +23,7 @@ import com.ecat.integration.EnvAirStationManagerIntegration.rule.AsmAlarmRegistr
 import com.ecat.integration.EnvAirStationManagerIntegration.rule.AsmAlarmRuleEvaluator;
 import com.ecat.integration.EnvAirStationManagerIntegration.rule.AsmAlarmRuleIndex;
 import com.ecat.integration.EnvAirStationManagerIntegration.scheduler.AsmAlarmSweepScheduler;
+import com.ecat.integration.EnvAirStationManagerIntegration.scheduler.AsmLanes;
 import com.ecat.integration.EnvAirStationManagerIntegration.scheduler.AsmStatRefreshScheduler;
 import com.ecat.integration.EnvAirStationManagerIntegration.service.AirStationSdkImpl;
 import com.ecat.integration.EnvAirStationManagerIntegration.service.AsmAlarmLifecycleService;
@@ -80,6 +82,9 @@ public class EnvAirStationManagerIntegration extends IntegrationBase {
 
     @Override
     public void onStart() {
+        // ASM 模块工作道接线：道挂本集成（onRemove sweep 拆卸），须先于 @Service
+        // bean 装配（bean 构造即 resolve()）。幂等 keep-first，disable→re-enable 重跑安全。
+        AsmLanes.wireWorkLane(HostedExecutors.bounded(1, this));
         // 类加载器必须是 URLClassLoader 才能被 ruoyi 反射加载（与 env-air-device-manager 同模式）
         if (!(this.loadOption.getClassLoader() instanceof URLClassLoader)) {
             throw new IllegalStateException("类加载器不是URLClassLoader，无法动态加载");
@@ -200,6 +205,9 @@ public class EnvAirStationManagerIntegration extends IntegrationBase {
     public void onRelease() {
         shutdownPipeline();
         log.info("Releasing {} integration", getName());
+        // 集成级 sweep（super）：拆卸挂在本集成上的模块工作道池（AsmLanes 接线的 bounded 池）。
+        // 原实现漏调 super——工作道迁移后必须补上，否则池泄漏到进程终局。
+        super.onRelease();
     }
 
     /** 反向收口：shutdown 各 consumer（drain 残留批）与调度器（关线程池）；幂等（null 守卫）。 */

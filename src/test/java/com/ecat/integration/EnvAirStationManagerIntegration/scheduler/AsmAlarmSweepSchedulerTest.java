@@ -13,7 +13,12 @@ import org.mockito.quality.Strictness;
 
 import java.time.Instant;
 import java.util.Collections;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
+import static org.mockito.ArgumentMatchers.anyLong;
+
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -47,7 +52,8 @@ class AsmAlarmSweepSchedulerTest {
     @BeforeEach
     void setUp() {
         registry = new AsmAlarmRegistry();
-        scheduler = new AsmAlarmSweepScheduler(mapper, registry, 5, executor);
+        scheduler = new AsmAlarmSweepScheduler(mapper, registry, 5, executor,
+                org.mockito.Mockito.mock(ExecutorService.class));
         lenient().when(mapper.closeBatch(anyList(), any(Instant.class))).thenReturn(1);
     }
 
@@ -55,6 +61,20 @@ class AsmAlarmSweepSchedulerTest {
         return AsmAlarmRecord.builder().id(id).alarmType("1").ruleName("t")
                 .logicDeviceUniqueId(UID).attrId("temperature").severity("0")
                 .startTime(start).endTime(null).status("ACTIVE").lastBreachTime(lastBreach).build();
+    }
+
+    @Test
+    void shutdown_cancelsSweepTask_adaptedExecutorNotShutDown() {
+        ScheduledFuture<?> future = org.mockito.Mockito.mock(ScheduledFuture.class);
+        org.mockito.Mockito.doReturn(future).when(executor)
+                .scheduleAtFixedRate(any(Runnable.class), anyLong(), anyLong(), any(TimeUnit.class));
+
+        scheduler.start();
+        scheduler.shutdown();
+
+        verify(future).cancel(false);
+        verify(executor, never()).shutdownNow();
+        verify(executor, never()).shutdown();
     }
 
     @Test

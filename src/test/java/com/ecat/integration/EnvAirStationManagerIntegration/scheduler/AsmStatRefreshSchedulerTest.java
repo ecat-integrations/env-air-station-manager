@@ -11,7 +11,10 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -36,12 +39,14 @@ class AsmStatRefreshSchedulerTest {
     private AsmStatAggregationEngine engine;
     @Mock
     private ScheduledExecutorService executor;
+    @Mock
+    private ExecutorService workLane;
 
     private AsmStatRefreshScheduler scheduler;
 
     @BeforeEach
     void setUp() {
-        scheduler = new AsmStatRefreshScheduler(engine, executor);
+        scheduler = new AsmStatRefreshScheduler(engine, executor, workLane);
     }
 
     @Test
@@ -51,6 +56,22 @@ class AsmStatRefreshSchedulerTest {
 
         scheduler.start();  // 重复 start no-op
         verify(executor, times(3)).scheduleAtFixedRate(any(Runnable.class), anyLong(), anyLong(), eq(TimeUnit.SECONDS));
+    }
+
+    @Test
+    void shutdown_cancelsAllArmedTasks_adaptedExecutorNotShutDown() {
+        // 引擎车道无独立生命周期：卸载语义=逐个 cancel 自持 future；适配注入的 executor 不归调度器所有
+        ScheduledFuture<?> future = org.mockito.Mockito.mock(ScheduledFuture.class);
+        org.mockito.Mockito.doReturn(future).when(executor)
+                .scheduleAtFixedRate(any(Runnable.class), anyLong(), anyLong(), any(TimeUnit.class));
+
+        scheduler.start();
+        org.junit.jupiter.api.Assertions.assertEquals(3, scheduler.armedTasks().size());
+        scheduler.shutdown();
+
+        verify(future, times(3)).cancel(false);
+        verify(executor, never()).shutdownNow();
+        verify(executor, never()).shutdown();
     }
 
     @Test
@@ -88,10 +109,14 @@ class AsmStatRefreshSchedulerTest {
 
     @Test
     void shutdown_withInjectedExecutor_doesNotCloseIt() {
-        // 测试注入 executor 不归调度器拥有（ownsExecutor=false）——shutdown 不关（测试自管生命周期）
+        // 测试注入 executor 不归调度器拥有——shutdown 只 cancel future 不关 executor（测试自管生命周期）
+        ScheduledFuture<?> future = org.mockito.Mockito.mock(ScheduledFuture.class);
+        org.mockito.Mockito.doReturn(future).when(executor)
+                .scheduleAtFixedRate(any(Runnable.class), anyLong(), anyLong(), any(TimeUnit.class));
         scheduler.start();
         scheduler.shutdown();
         scheduler.shutdown();  // 幂等
+        verify(future, times(3)).cancel(false);
         verify(executor, never()).shutdownNow();
     }
 }

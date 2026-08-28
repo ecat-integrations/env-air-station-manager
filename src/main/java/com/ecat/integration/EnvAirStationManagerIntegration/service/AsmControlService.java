@@ -22,11 +22,14 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
+
+import javax.annotation.PreDestroy;
 
 /**
  * ASM 统一控制服务（设计 §7）——<b>唯一控制收口</b>：REST（REMOTE）与 SDK（LOCAL）两路都汇入本服务，
@@ -48,6 +51,11 @@ import java.util.function.Function;
  *
  * <p>executor / 超时调度 / 时钟全部注入（测试手动驱动，禁 sleep）。已知边界（设计 §7 注明）：
  * 绕过 ASM 直接打 core / logicdevice-api 的写操作不经本审计。</p>
+ *
+ * <p><b>调度登记声明（08 法表 I-4 B 处置）</b>：本服务是控制命令路径（{@code setDisplayValue}
+ * 经 attr 写闸，治理已由 T12/F-10 吸收），controlExecutor/timeoutScheduler 为一次性任务
+ * （非周期调度）硬理由保留自建——控制写有 10s 超时与审计语义，若与物化/告警共用 module:asm
+ * 车道串行，慢物化会推迟控制执行制造伪 TIMEOUT；专用单线程 daemon 生命周期随模块，隔离即正确。</p>
  *
  * @author coffee
  */
@@ -73,6 +81,12 @@ public class AsmControlService {
     /** 专用执行线程（不占总线线程）。 */
     private final Executor controlExecutor;
     private final TimeoutScheduler timeoutScheduler;
+    /**
+     * 生产路径的超时调度池本体（测试构造为 null——测试注入手动驱动的 TimeoutScheduler）：
+     * @PreDestroy 统一关停用（见 {@link #shutdown}），与 controlExecutor 同属本服务
+     * 自建执行资源（I-4 B 处置，见类 javadoc）。
+     */
+    private ScheduledExecutorService prodScheduler;
     private final Clock clock;
     private final Duration timeout;
     /** 控制终态帧广播（尽力而为通道，失败不得影响审计落库）。 */
@@ -80,16 +94,26 @@ public class AsmControlService {
     /** 终态帧序列化（自拥裸 ObjectMapper，载荷无时间类型，同模块 consumer 模式）。 */
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    /** 生产构造：自建单线程 executor + 定时超时调度 + 系统钟。 */
+    /** 生产构造：自建单线程 executor + 定时超时调度 + 系统钟（字段直赋——this() 参数禁引 this）。 */
     @Autowired
     public AsmControlService(AsmControlRecordMapper recordMapper, AsmSseBroadcaster broadcaster) {
-        this(recordMapper, AsmControlService::resolveStationDevice,
-                Executors.newSingleThreadExecutor(r -> {
-                    Thread t = new Thread(r, "asm-control-executor");
-                    t.setDaemon(true);
-                    return t;
-                }),
-                prodTimeoutScheduler(), Clock.systemDefaultZone(), DEFAULT_TIMEOUT, broadcaster);
+        this.recordMapper = recordMapper;
+        this.stationResolver = AsmControlService::resolveStationDevice;
+        this.controlExecutor = Executors.newSingleThreadExecutor(r -> {
+            Thread t = new Thread(r, "asm-control-executor");
+            t.setDaemon(true);
+            return t;
+        });
+        this.prodScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "asm-control-timeout");
+            t.setDaemon(true);
+            return t;
+        });
+        this.timeoutScheduler = (task, delay) ->
+                prodScheduler.schedule(task, delay.toMillis(), TimeUnit.MILLISECONDS);
+        this.clock = Clock.systemDefaultZone();
+        this.timeout = DEFAULT_TIMEOUT;
+        this.broadcaster = broadcaster;
     }
 
     /** 测试构造：全依赖注入（executor/调度器/时钟手动驱动）。 */
@@ -105,13 +129,25 @@ public class AsmControlService {
         this.broadcaster = broadcaster;
     }
 
-    private static TimeoutScheduler prodTimeoutScheduler() {
-        ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
-            Thread t = new Thread(r, "asm-control-timeout");
-            t.setDaemon(true);
-            return t;
-        });
-        return (task, delay) -> scheduler.schedule(task, delay.toMillis(), TimeUnit.MILLISECONDS);
+    /**
+     * 停自建执行资源（@PreDestroy，jar 卸载期 Spring 容器调；镜像同包
+     * {@link AsmSseBroadcaster#shutdown()} 的收口模式）。
+     *
+     * <p>E4-1 盘点处置：本服务两处自建池此前无任何停机路径（daemon 线程卸载后滞留）。
+     * 未走 HostedExecutors/onRemove 绑定的原因：本类是动态 jar 的 Spring @Service，
+     * 生命周期归 Spring 容器（@PreDestroy 即本类的停机 chokepoint），跨容器挂
+     * ECAT 集成 onRemove 需要集成层 getSpringBean 接线（时序与归属待设计，列入
+     * E4-1 待接线清单）；先以容器自身销毁回调收口。测试注入的 executor 若非
+     * ExecutorService（如 {@code Runnable::run}）则跳过（测试无池可停）。
+     */
+    @PreDestroy
+    public void shutdown() {
+        if (controlExecutor instanceof ExecutorService) {
+            ((ExecutorService) controlExecutor).shutdownNow();
+        }
+        if (prodScheduler != null) {
+            prodScheduler.shutdownNow();
+        }
     }
 
     /** 生产 resolver：LogicDeviceManager 全量站房设备中按 uniqueId 精确匹配（同 AirStationSdkImpl 模式）。 */

@@ -14,12 +14,10 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.Executors;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * ASM 报警心跳 sweep 调度器（镜像 ADM AdmAlarmExpiryScheduler，窗口全局统一非 per-rule）。
@@ -32,6 +30,11 @@ import java.util.concurrent.atomic.AtomicInteger;
  * <p>闭单批量 UPDATE（status→INACTIVE + end_time=now）后同步摘 {@link AsmAlarmRegistry} 徽章槽
  * （registry 是 DB 非权威镜像）。sweep 体内必 catch（scheduleAtFixedRate 抛未捕获异常抑制后续 task，
  * 同 AsmStatRefreshScheduler 纪律）。测试注入 executor + 手动调 {@link #doSweep}，禁 sleep。</p>
+ *
+ * <p><b>车道登记（计时归 biz 池+HostedExecutors 工作道）</b>：
+ * 生产 executor 退役自建单线程池，周期 sweep 经 {@link AsmLanes#resolve()} 登记——biz 池计时 +
+ * 工作体进模块单飞道（与三粒度物化 tick 同道串行互斥——sweep 是轻量 DB UPDATE，物化窗口
+ * 有界，串行无饥饿风险）。</p>
  *
  * @author coffee
  */
@@ -50,33 +53,30 @@ public class AsmAlarmSweepScheduler {
     private final AsmAlarmRecordMapper recordMapper;
     private final AsmAlarmRegistry registry;
     private final int heartbeatWindowMinutes;
-    private final ScheduledExecutorService executor;
-    private final boolean ownsExecutor;
+    private final AsmLanes.Lane lane;
     private ScheduledFuture<?> scheduledFuture;
 
-    /** 生产构造：@Service 注入 + @Value 读窗口配置，自建单线程命名守护线程池。 */
+    /** 生产构造：@Service 注入 + @Value 读窗口配置；周期 sweep 登记 module:asm 车道（biz 池计时+单飞道串行）。 */
     @Autowired
     public AsmAlarmSweepScheduler(AsmAlarmRecordMapper recordMapper,
                                   AsmAlarmRegistry registry,
                                   @Value("${asm.alarm.heartbeat-window-minutes:5}") int heartbeatWindowMinutes) {
-        this(recordMapper, registry, heartbeatWindowMinutes,
-                Executors.newSingleThreadScheduledExecutor(namedThreadFactory("asm-alarm-sweep")), true);
+        this(recordMapper, registry, heartbeatWindowMinutes, AsmLanes.resolve());
     }
 
-    /** 测试构造：注入 mock executor 捕获 task 手动触发，不拥有 executor（测试自管）。 */
+    /** 测试构造：注入 mock 计时 executor 捕获 task 手动触发 + 工作道，不拥有任一 executor（测试自管）。 */
     AsmAlarmSweepScheduler(AsmAlarmRecordMapper recordMapper, AsmAlarmRegistry registry,
-                           int heartbeatWindowMinutes, ScheduledExecutorService executor) {
-        this(recordMapper, registry, heartbeatWindowMinutes, executor, false);
+                           int heartbeatWindowMinutes, ScheduledExecutorService executor,
+                           ExecutorService workLane) {
+        this(recordMapper, registry, heartbeatWindowMinutes, AsmLanes.laneOf(executor, workLane));
     }
 
-    private AsmAlarmSweepScheduler(AsmAlarmRecordMapper recordMapper, AsmAlarmRegistry registry,
-                                   int heartbeatWindowMinutes, ScheduledExecutorService executor,
-                                   boolean ownsExecutor) {
+    AsmAlarmSweepScheduler(AsmAlarmRecordMapper recordMapper, AsmAlarmRegistry registry,
+                           int heartbeatWindowMinutes, AsmLanes.Lane lane) {
         this.recordMapper = recordMapper;
         this.registry = registry;
         this.heartbeatWindowMinutes = heartbeatWindowMinutes;
-        this.executor = executor;
-        this.ownsExecutor = ownsExecutor;
+        this.lane = lane;
     }
 
     /** 启动周期 sweep（integration onStart 调一次；重复调幂等取消旧 task 重arm）。 */
@@ -84,7 +84,7 @@ public class AsmAlarmSweepScheduler {
         if (scheduledFuture != null) {
             scheduledFuture.cancel(false);
         }
-        scheduledFuture = executor.scheduleAtFixedRate(this::sweepSafely,
+        scheduledFuture = lane.atFixedRate(this::sweepSafely,
                 INITIAL_DELAY_MINUTES, SWEEP_PERIOD_MINUTES, TimeUnit.MINUTES);
         log.info("[诊断调试] ASM 报警 sweep 已启动: 周期={}min 心跳窗={}min",
                 SWEEP_PERIOD_MINUTES, heartbeatWindowMinutes);
@@ -133,24 +133,12 @@ public class AsmAlarmSweepScheduler {
         return closed;
     }
 
-    /** 模块卸载取消周期任务 + 关自建线程池（注入的测试 executor 不关，测试自管）。 */
+    /** 模块卸载取消周期 task（计时器/工作道不停——工作道拆卸挂集成 onRemove sweep，
+     * 重 arm 走 start）。 */
     @PreDestroy
     public void shutdown() {
         if (scheduledFuture != null) {
             scheduledFuture.cancel(false);
         }
-        if (ownsExecutor && executor != null) {
-            executor.shutdownNow();
-        }
-    }
-
-    /** 命名守护线程工厂（线程名 asm-alarm-sweep-N）。 */
-    private static ThreadFactory namedThreadFactory(String prefix) {
-        AtomicInteger counter = new AtomicInteger(0);
-        return r -> {
-            Thread t = new Thread(r, prefix + "-" + counter.incrementAndGet());
-            t.setDaemon(true);
-            return t;
-        };
     }
 }
