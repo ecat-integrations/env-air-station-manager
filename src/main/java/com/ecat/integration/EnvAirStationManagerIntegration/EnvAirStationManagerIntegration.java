@@ -202,12 +202,12 @@ public class EnvAirStationManagerIntegration extends IntegrationBase {
     }
 
     @Override
-    public void onRelease() {
+    protected void onReleaseImpl() {
         shutdownPipeline();
         log.info("Releasing {} integration", getName());
-        // 集成级 sweep（super）：拆卸挂在本集成上的模块工作道池（AsmLanes 接线的 bounded 池）。
-        // 原实现漏调 super——工作道迁移后必须补上，否则池泄漏到进程终局。
-        super.onRelease();
+        // 集成级 sweep 由 final 模板在钩子后 finally 必达：拆卸挂在本集成上的模块工作道池
+        // （AsmLanes 接线的 bounded 池）。原实现曾漏 super 致池泄漏到进程终局
+        // （bug-record-20260828-171500），模板化后结构性不可漏。
     }
 
     /** 反向收口：shutdown 各 consumer（drain 残留批）与调度器（关线程池）；幂等（null 守卫）。 */
