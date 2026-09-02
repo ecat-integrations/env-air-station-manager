@@ -40,6 +40,9 @@ class AsmMapperXmlWellFormedTest {
             try {
                 DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
                 dbf.setNamespaceAware(false);
+                // 禁外部 DTD 加载：mapper 头部 DOCTYPE 指向 mybatis.org，裸解析会按 URL 联网拉取，
+                // 网络不可达时 Xerces 无超时控制会吊死构建（运行时 MyBatis 走 jar 内置 DTD 从不联网）
+                dbf.setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false);
                 Document doc = dbf.newDocumentBuilder().parse(f);
                 assertTrue(doc.getDocumentElement() != null, f.getName() + " 无根元素");
             } catch (Exception e) {
