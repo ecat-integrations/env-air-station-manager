@@ -72,9 +72,12 @@ test('G7-3 抽屉行着色：NORMAL 绿徽 / ALARM 红徽 / 值列文字色 @g7'
   const badges = page.locator('.asm-table .asm-badge');
   const cnt = await badges.count();
   expect(cnt, '温湿度抽屉应有状态徽章行').toBeGreaterThan(0);
-  const tiers = await badges.evaluateAll((els) => els.map((e) => e.className));
-  expect(tiers.every((c) => c.includes('tier-success')),
-    `在线正常设备状态徽章应全绿（实际：${tiers.join(' | ')}）`).toBe(true);
+  // tier 放行规则：success=正常；unknown 仅当徽章文本=「未设置」（EMPTY——standalone 状态属性
+  // 族 manual_status 等初始未写入，2026-08-29 状态属性 def 上移后抽屉行混入该族，属合法初始态；
+  // 其他 unknown（真未知状态）仍判失败，守卫强度不降。
+  const badgeStates = await badges.evaluateAll((els) => els.map((e) => ({ tier: e.className, text: e.textContent.trim() })));
+  expect(badgeStates.every((b) => b.tier.includes('tier-success') || (b.tier.includes('tier-unknown') && b.text === '未设置')),
+    `在线正常设备状态徽章应全绿（未设置 EMPTY 除外）（实际：${badgeStates.map((b) => b.tier + ':' + b.text).join(' | ')}）`).toBe(true);
 
   // 值列文字色：成功档行内联 color=rgb(103, 194, 58)（#67c23a）
   const valueColor = await page.locator('.asm-table tbody tr td:nth-child(2)').first()
@@ -101,9 +104,10 @@ test('G7-4 alarm_list 状态列 + 状态筛选生效 @g7', async ({ page }) => {
   const base = new AsmBasePage(page, 'alarm_list');
   await base.goto();
 
-  // 状态列存在：徽章文本 ∈ {活跃, 已恢复}
-  await page.locator('.asm-st-badge').first().waitFor({ timeout: 15000 });
-  const texts = await page.locator('.asm-st-badge').allInnerTexts();
+  // 状态列存在：徽章文本 ∈ {活跃, 已恢复}——限定行首列（级别列同为 el-tag：普通/重要/紧急，勿全局抓）
+  const statusTags = page.locator('.el-table__row td:first-child .el-tag');
+  await statusTags.first().waitFor({ timeout: 15000 });
+  const texts = await statusTags.allInnerTexts();
   expect(texts.length).toBeGreaterThan(0);
   expect(texts.every((t) => t === '活跃' || t === '已恢复')).toBe(true);
 
@@ -111,18 +115,20 @@ test('G7-4 alarm_list 状态列 + 状态筛选生效 @g7', async ({ page }) => {
   const reqPromise = page.waitForRequest(
     (r) => r.url().includes('/asm-monitor/alarm-record/list') && r.url().includes('status=ACTIVE'),
     { timeout: 15000 });
-  await page.locator('select').filter({ has: page.locator('option[value="ACTIVE"]') })
-    .selectOption('ACTIVE');
+  // el-select 点选范式（2026-09-02 ruoyi 化：原生 select 已替换；下拉 teleport 到 body）
+  await page.locator('.asm-filter .el-select').nth(1).click();  // nth1=状态（nth0=设备；placeholder 均「请选择」不可按文案 filter）
+  await page.locator('.el-select-dropdown__item:visible', { hasText: '活跃' }).first().click();
   await reqPromise;
   await page.waitForResponse((r) => r.url().includes('status=ACTIVE') && r.status() === 200, { timeout: 15000 });
   await page.waitForTimeout(0);  // 让响应渲染落定（上面 waitForResponse 已确定性等到数据帧）
   // 若环境有 ACTIVE episode：行徽全「活跃」；若当前窗内无 ACTIVE 行（全已恢复），只验筛选请求已带参（上方网络断言）
-  const activeTexts = await page.locator('.asm-st-badge').allInnerTexts();
+  const activeTexts = await page.locator('.el-table__row td:first-child .el-tag').allInnerTexts();
   if (activeTexts.length > 0) {
     expect(activeTexts.every((t) => t === '活跃'),
       `活跃筛选后行徽应全「活跃」（实际：${activeTexts.join(',')}）`).toBe(true);
   }
 
-  // 还原「全部」
-  await page.locator('select').filter({ has: page.locator('option[value="ACTIVE"]') }).selectOption('');
+  // 还原「全部」（el-select clearable 的清空钮，或点选项「全部」）
+  await page.locator('.asm-filter .el-select').nth(1).click();
+  await page.locator('.el-select-dropdown__item:visible', { hasText: '全部' }).first().click();
 });

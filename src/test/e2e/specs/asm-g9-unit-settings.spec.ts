@@ -125,7 +125,7 @@ test('G9-2+G9-3 改单位+小数位保存生效（snapshot 出口断言）→ �
   await page.locator('.asm-unit-settings').waitFor({ state: 'hidden', timeout: 10_000 });
   const snapDone = page.waitForResponse(
     (r) => r.url().includes('/asm-monitor/snapshot') && r.url().includes('unit=custom'), { timeout: 15_000 });
-  await page.locator('.asm-unit-btn', { hasText: '自定义' }).click();
+  await page.locator('.asm-unit-btn, .el-radio-button', { hasText: '自定义' }).first().click();
   const snap = (await (await snapDone).json()).data;
   const dev = snap.find((d: any) => d.displayName === DEVICE);
   expect(dev, 'snapshot(custom) 应含 CO 标准气体钢瓶').toBeTruthy();

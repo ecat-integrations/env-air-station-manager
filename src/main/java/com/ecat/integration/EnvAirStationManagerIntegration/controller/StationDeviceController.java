@@ -42,6 +42,19 @@ public class StationDeviceController extends BaseController {
         return AjaxResult.success(service.listParamBindings());
     }
 
+    /**
+     * 启动装载就绪信号（前端 station_device 页门控轮询源，语义复刻 ADM stat-config.initialized）。
+     * data.initialized：airstation 集成的 createAllStationDevices 尾部完成点标志
+     * （isStationDevicesCreated，零 entry 也置位）；airstation 集成未注册（禁用/core 未就绪）
+     * → 恒 true——真未配置如实显示，不永久卡初始化骨架。前端据此区分「系统初始化中」与
+     * 「真未配置」，杜绝零设备环境门控永不放行的空白页缺陷（bugs/bug-record-20260902-110219）。
+     */
+    @PreAuthorize("@ss.hasPermi('asm-monitor:device:list')")
+    @GetMapping("/ready")
+    public AjaxResult ready() {
+        return AjaxResult.success(service.bootReady());
+    }
+
     /** 该类型槽可选厂家型号。 */
     @PreAuthorize("@ss.hasPermi('asm-monitor:device:list')")
     @GetMapping("/params/{type}/vendors")

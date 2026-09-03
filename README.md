@@ -70,9 +70,9 @@ DDL 手动 apply（无自动迁移）：`src/main/resources/sql/asm_data.sql`（
 | `GET /stream?token=` | 总览 SSE 长连接（具名帧 device.data.update；帧含双单位值+status+ruleAlarmActive） |
 | `GET /history` | granularity / params / mode / unit / start / end / 分页 |
 | `GET /stat-params` | 可查参数目录（SDK 同源） |
-| `/alarm-rule` CRUD、`GET /alarm-record/list?status=` | 报警规则（改后热加载）与记录（状态过滤） |
+| `/alarm-rule` CRUD、`GET /alarm-record/list?status=` | 报警规则（改后热加载；list 行含 `deviceLabels`[{slot,attrs}] 中文标注；写端点 alarmType 治理：重复 400「报警标识已存在」、预置规则（settingContent configurable!=true）标识禁改 400）与记录（状态过滤；行含 `device_label`/`attr_label`/`trigger_time`(=start_time)/`recover_time`(=end_time)/`duration_ms`(活跃行 null)） |
 | `POST /control`、`GET /control-record/list`、`GET /control/{id}` | 控制下发（REMOTE）、审计查询、单条终态查询（仅 SSE 重连补偿用，非轮询通道） |
-| `GET/PUT /config-stat`、`GET/PUT /config-unit` | 聚合配置（enabled/粒度掩码/物化 mode）与单位偏好（STANDARD 行由 seed 维护不开放写）；config-unit PUT 体含可空 `displayPrecision`（0-6，null=不覆盖），snapshot 数值行含 `unitKey`/`displayPrecision`/`unitOptions`（单位设置抽屉数据源） |
+| `GET/PUT /config-stat`、`GET/PUT /config-unit` | 聚合配置（enabled/粒度掩码/物化 mode；GET 行含 `device_label`/`attr_label` 中文标注）与单位偏好（STANDARD 行由 seed 维护不开放写）；config-unit PUT 体含可空 `displayPrecision`（0-6，null=不覆盖），snapshot 数值行含 `unitKey`/`displayPrecision`/`unitOptions`（单位设置抽屉数据源） |
 
 ### 对外 SDK（跨集成消费方）
 

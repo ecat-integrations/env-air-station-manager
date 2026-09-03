@@ -15,7 +15,8 @@
       <!-- 已配置：设备识别 + 引用标注 + 原样 dump（零契约假设） -->
       <template v-if="paramBinding.configured">
         <div class="device-info">
-          <div class="row"><span>厂商</span><span class="val">{{ paramBinding.coordinate || '—' }}</span></div>
+          <!-- coordinate 是系统标识：mono 灰弱化（运维可读），与设备名等业务值区分 -->
+          <div class="row"><span>厂商</span><span class="val sys-val" :title="paramBinding.coordinate">{{ paramBinding.coordinate || '—' }}</span></div>
           <div class="row"><span>设备名</span><span class="val">{{ paramBinding.title || '—' }}</span></div>
         </div>
         <div v-if="referencedBy.length" class="ref-note">
@@ -31,12 +32,12 @@
 
       <!-- ===== 操作区(状态机) ===== -->
       <div v-if="!paramBinding.configured" class="actions actions-single">
-        <button class="btn primary" @click="$emit('add-device')">配置设备</button>
+        <el-button type="primary" @click="$emit('add-device')">配置设备</el-button>
       </div>
       <div v-else class="actions">
-        <button class="btn" @click="$emit('replace')">更换设备</button>
-        <button class="btn" @click="$emit('reconnect')">修改配置</button>
-        <button class="btn danger" @click="$emit('unbind')">移除</button>
+        <el-button @click="$emit('replace')">更换设备</el-button>
+        <el-button @click="$emit('reconnect')">修改配置</el-button>
+        <el-button type="danger" plain @click="$emit('unbind')">移除</el-button>
       </div>
     </div>
   </section>
@@ -75,6 +76,7 @@ const stateClass = computed(() => (props.paramBinding?.configured ? 'configured'
 .row { display: flex; font-size: 13px; margin: 3px 0; }
 .row span:first-child { color: #6b7280; width: 64px; }
 .row .val { color: #111827; }
+.row .sys-val { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; color: #9ca3af; align-self: center; }
 .ref-note {
   font-size: 12px; color: #d97706; background: #fffbeb; border: 1px solid #fde68a;
   border-radius: 4px; padding: 6px 10px; margin-bottom: 12px;
@@ -89,10 +91,4 @@ const stateClass = computed(() => (props.paramBinding?.configured ? 'configured'
 
 .actions { display: flex; gap: 8px; margin-top: 16px; flex-wrap: wrap; }
 .actions-single { justify-content: center; margin-top: 32px; }
-
-.btn { font-size: 13px; padding: 6px 14px; border: 1px solid #d1d5db; border-radius: 4px; background: #fff; cursor: pointer; }
-.btn.primary { background: #2563eb; color: #fff; border-color: #2563eb; }
-.btn.danger { color: #dc2626; border-color: #fecaca; }
-.btn:hover { opacity: .85; }
-.btn:disabled { opacity: .5; cursor: not-allowed; }
 </style>

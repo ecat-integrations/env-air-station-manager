@@ -1,7 +1,9 @@
 package com.ecat.integration.EnvAirStationManagerIntegration.controller;
 
+import com.ecat.integration.EnvAirStationManagerIntegration.controller.dto.AsmAlarmRecordRowDto;
 import com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmAlarmRecord;
 import com.ecat.integration.EnvAirStationManagerIntegration.mapper.AsmAlarmRecordMapper;
+import com.ecat.integration.EnvAirStationManagerIntegration.service.AsmDeviceLabelService;
 import com.ecat.integration.EnvAirStationManagerIntegration.support.AsmAlarmStatus;
 import com.ruoyi.common.core.controller.BaseController;
 import com.ruoyi.common.core.domain.AjaxResult;
@@ -14,6 +16,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.time.LocalDateTime;
 import java.time.ZoneId;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -23,6 +26,12 @@ import java.util.Map;
  *
  * <p>start/end 为 ISO-8601 LocalDateTime 壁钟串（前端 datetime-local），controller 按 core JVM 壁钟时区
  * 落 UTC 绝对时刻（与 AsmHistoryQueryController 同口径）。查询窗按 end_time 落窗（触发/恢复时刻）。</p>
+ *
+ * <p><b>行追加契约字段</b>（前端 ruoyi 化，字段名固定）：{@code device_label}（槽中文）/
+ * {@code attr_label}（attr 中文 displayName）/ {@code trigger_time}（=start_time，episode 模型触发
+ * 时刻唯一库承载）/ {@code recover_time}（=end_time）/ {@code duration_ms}（=end−start，活跃行
+ * null）——映射依据与旧 vue「触发时刻」列绑定漂移见 {@link AsmAlarmRecordRowDto} javadoc。
+ * 旧字段经平铺路径不变（追加不换口径）。label 口径收口 {@link AsmDeviceLabelService}。</p>
  *
  * @author coffee
  */
@@ -35,6 +44,7 @@ public class AsmAlarmRecordController extends BaseController {
     private static final ZoneId JVM_ZONE = ZoneId.systemDefault();
 
     private final AsmAlarmRecordMapper recordMapper;
+    private final AsmDeviceLabelService labelService;
 
     /**
      * 报警记录分页查询。
@@ -76,8 +86,19 @@ public class AsmAlarmRecordController extends BaseController {
                 : rows.subList(fromIdx, Math.min(fromIdx + size, rows.size()));
         Map<String, Object> data = new HashMap<>();
         data.put("total", total);
-        data.put("rows", pageRows);
+        data.put("rows", toContractRows(pageRows));
         return AjaxResult.success(data);
+    }
+
+    /** 记录行 → 契约行（追加中文 label 与触发/恢复/时长字段；映射依据见行 DTO javadoc）。 */
+    private List<AsmAlarmRecordRowDto> toContractRows(List<AsmAlarmRecord> pageRows) {
+        List<AsmAlarmRecordRowDto> out = new ArrayList<>(pageRows.size());
+        for (AsmAlarmRecord record : pageRows) {
+            out.add(AsmAlarmRecordRowDto.of(record,
+                    labelService.slotLabel(record.getLogicDeviceUniqueId()),
+                    labelService.attrLabel(record.getLogicDeviceUniqueId(), record.getAttrId())));
+        }
+        return out;
     }
 
     /** status 归一：null/空白=不过滤；仅认 ACTIVE/INACTIVE（AsmAlarmStatus），非法值显式抛。 */

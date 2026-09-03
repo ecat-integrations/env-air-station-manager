@@ -5,61 +5,66 @@
        mode='replace'   选 vendor → provision(operation=replace,带 oldDeviceId) → flow
        mode='reconnect' 跳过 vendor → reconfigure(启动 RECONFIGURE flow)→ flow
        CREATE_ENTRY 即完成，emit completed（后端原子收口，前端只管关弹窗刷新）。 -->
-  <div v-if="open" class="dlg-overlay" @click.self="$emit('close')">
-    <div class="dlg-box">
-      <div class="dlg-head">
-        <span class="dlg-title">{{ title }}</span>
-        <button class="dlg-x" @click="$emit('close')" :disabled="busy">×</button>
-      </div>
-      <p v-if="error" class="dlg-err">{{ error }}</p>
+  <el-dialog
+    :model-value="open"
+    :title="title"
+    width="600px"
+    :close-on-click-modal="true"
+    destroy-on-close
+    @update:model-value="onVisible"
+  >
+    <p v-if="error" class="dlg-err">{{ error }}</p>
 
-      <!-- ① 选厂家/型号（add/replace），附可选 SN/设备名（IMPORT_FLOW profile 消费；USER_FLOW 在 flow 内填） -->
-      <div v-if="state === 'vendor'" class="dlg-body">
-        <div class="fg">
-          <label>厂家 / 型号 <span class="req">*</span></label>
-          <select v-model="vendorKey" :disabled="busy">
-            <option value="" disabled>请选择...</option>
-            <option v-for="v in vendors" :key="vKey(v)" :value="vKey(v)">
-              {{ v.label }}({{ v.coordinate }})
-            </option>
-          </select>
-          <p v-if="!vendors.length" class="dlg-hint">该类型暂无已注册厂家 profile（ELECTRONIC_FENCE/CLEANLINESS 如实为空）。</p>
-          <p v-else class="dlg-hint">选定后进入设备配置向导,填写序列号 / 名称 / 连接等设备信息。</p>
-        </div>
-        <div class="fg">
-          <label>序列号 SN（可选）</label>
-          <input v-model="sn" :disabled="busy" placeholder="无 SN 的集成可留空" />
-        </div>
-        <div class="fg">
-          <label>设备名称（可选）</label>
-          <input v-model="name" :disabled="busy" placeholder="留空使用默认名" />
-        </div>
-        <div class="dlg-actions">
-          <button class="btn" @click="$emit('close')" :disabled="busy">取消</button>
-          <button class="btn primary" :disabled="!vendorKey || busy" @click="doProvision">
-            {{ busy ? '启动中…' : '下一步' }}
-          </button>
-        </div>
+    <!-- ① 选厂家/型号（add/replace），附可选 SN/设备名（IMPORT_FLOW profile 消费；USER_FLOW 在 flow 内填） -->
+    <div v-if="state === 'vendor'">
+      <div class="fg">
+        <label>厂家 / 型号 <span class="req">*</span></label>
+        <el-select v-model="vendorKey" :disabled="busy" placeholder="请选择...">
+          <el-option
+            v-for="v in vendors"
+            :key="vKey(v)"
+            :label="`${v.label}(${v.coordinate})`"
+            :value="vKey(v)"
+          />
+        </el-select>
+        <p v-if="!vendors.length" class="dlg-hint">该类型暂无已注册厂家 profile（ELECTRONIC_FENCE/CLEANLINESS 如实为空）。</p>
+        <p v-else class="dlg-hint">选定后进入设备配置向导,填写序列号 / 名称 / 连接等设备信息。</p>
       </div>
-
-      <!-- ② config flow 步（lit <flow-form>，配置/更换/改连接共用） -->
-      <div v-else-if="state === 'flow'" class="dlg-body">
-        <flow-form
-          v-if="libLoaded"
-          :flowId="flowId"
-          :stepId="stepId"
-          :schema="schema"
-          :data="flowData"
-          :errors="flowErrors"
-          :loading="busy"
-          :navigation="{ isFirstStep: stepId === initialStepId, isLastStep: false }"
-          @flow-submit="onFlowSubmit"
-          @flow-previous="onFlowPrevious"
-        ></flow-form>
-        <p v-else class="dlg-hint">配置组件加载中…</p>
+      <div class="fg">
+        <label>序列号 SN（可选）</label>
+        <el-input v-model="sn" :disabled="busy" placeholder="无 SN 的集成可留空" />
+      </div>
+      <div class="fg">
+        <label>设备名称（可选）</label>
+        <el-input v-model="name" :disabled="busy" placeholder="留空使用默认名" />
       </div>
     </div>
-  </div>
+
+    <!-- ② config flow 步（lit <flow-form>，配置/更换/改连接共用） -->
+    <div v-else-if="state === 'flow'">
+      <flow-form
+        v-if="libLoaded"
+        :flowId="flowId"
+        :stepId="stepId"
+        :schema="schema"
+        :data="flowData"
+        :errors="flowErrors"
+        :loading="busy"
+        :navigation="{ isFirstStep: stepId === initialStepId, isLastStep: false }"
+        @flow-submit="onFlowSubmit"
+        @flow-previous="onFlowPrevious"
+      ></flow-form>
+      <p v-else class="dlg-hint">配置组件加载中…</p>
+    </div>
+
+    <!-- 底部动作条仅 vendor 步存在（flow 步的上一步/下一步由 <flow-form> 自带） -->
+    <template #footer v-if="state === 'vendor'">
+      <el-button :disabled="busy" @click="$emit('close')">取消</el-button>
+      <el-button type="primary" :disabled="!vendorKey || busy" @click="doProvision">
+        {{ busy ? '启动中…' : '下一步' }}
+      </el-button>
+    </template>
+  </el-dialog>
 </template>
 
 <script setup>
@@ -78,6 +83,12 @@ const props = defineProps({
   oldDeviceId: { type: String, default: null },
 })
 const emit = defineEmits(['close', 'completed'])
+
+// el-dialog 关闭请求（X/遮罩点击）统一转 close 上抛，开关真相在父级 open prop；
+// busy 期间是否放行由父级 close 处理器守卫（本组件不拦）。
+function onVisible(v) {
+  if (!v) emit('close')
+}
 
 // flow 内部状态（自管步进）
 const state = ref('vendor')            // vendor | flow
@@ -245,27 +256,12 @@ async function onFlowPrevious() {
 </script>
 
 <style scoped>
-.dlg-overlay {
-  position: fixed; inset: 0; background: rgba(0,0,0,.4);
-  display: flex; align-items: flex-start; justify-content: center; padding: 40px 0; z-index: 2000;
-  overflow: auto;
-}
-.dlg-box { background: #fff; border-radius: 10px; width: 600px; max-width: 94vw; box-shadow: 0 8px 30px rgba(0,0,0,.2); }
-.dlg-head { display: flex; justify-content: space-between; align-items: center; padding: 14px 18px; border-bottom: 1px solid #e5e7eb; }
-.dlg-title { font-weight: 600; font-size: 16px; }
-.dlg-x { border: none; background: none; font-size: 22px; cursor: pointer; color: #6b7280; line-height: 1; }
-.dlg-err { color: #dc2626; font-size: 13px; margin: 8px 18px 0; }
-.dlg-body { padding: 18px; }
+.dlg-err { color: #dc2626; font-size: 13px; margin: 0 0 12px; }
 .dlg-hint { color: #6b7280; font-size: 13px; }
 .fg { margin-bottom: 14px; }
 .fg label { display: block; font-size: 13px; font-weight: 500; margin-bottom: 5px; color: #374151; }
 .fg .req { color: #ef4444; }
-.fg select, .fg input { width: 100%; padding: 8px 10px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px; box-sizing: border-box; }
-.dlg-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
-.btn { font-size: 13px; padding: 6px 14px; border: 1px solid #d1d5db; border-radius: 4px; background: #fff; cursor: pointer; }
-.btn.primary { background: #2563eb; color: #fff; border-color: #2563eb; }
-.btn:hover { opacity: .85; }
-.btn:disabled { opacity: .5; cursor: not-allowed; }
+.fg :deep(.el-select) { width: 100%; }
 
 /* lit <flow-form> 在 shadow DOM 自带样式,外层不干扰 */
 </style>

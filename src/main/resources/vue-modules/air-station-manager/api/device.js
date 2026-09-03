@@ -1,19 +1,21 @@
 import request from '@/utils/request'
-import { getSnapshot } from './asm'
 
 /**
- * 启动装载门控（镜像 ADM waitAdmReady）：airstation logic 设备由集成装载集中创建，
- * 起动窗口内 registry 空——若直接渲染会把 37 槽显示成「全部未配置」误导。轮询 snapshot
- * 直到返回非空（首台 logicdevice_station 设备就绪）再放行页面数据加载；期间面板显骨架横幅。
+ * 启动装载门控（语义复刻 ADM waitAdmReady 的 stat-config.initialized 信号）：airstation
+ * logic 设备由 INTEGRATIONS_ALL_LOADED 事件集中创建，起动窗口内 registry 空——直接渲染会把
+ * 37 槽显示成「全部未配置」误导。放行键是**后端完成点信号**而非数据形态/超时：
+ * 轮询 `/asm-monitor/device/ready` 的 initialized（airstation createAllStationDevices
+ * 尾部置位，零设备也置位；集成禁用恒 true）——零设备环境照样放行显示真实空态，
+ * 未就绪则持续骨架（无时间上限，由后端信号决定）。
  */
 export async function waitAsmReady(pollMs = 3000) {
   for (;;) {
     try {
-      const res = await getSnapshot()
-      if (Array.isArray(res.data) && res.data.length > 0) return
+      const res = await request({ url: '/asm-monitor/device/ready', method: 'get' })
+      if (res && res.data && res.data.initialized) return
     } catch (e) {
-      // core 起动中端点不可达——与空数组同等对待（继续轮询，不打断）
-      console.warn('[asm] 等待初始化期间 snapshot 不可达，继续轮询', e && e.message)
+      // core 起动中端点不可达——与 initialized=false 同等对待（继续轮询，不打断）
+      console.warn('[asm] 等待初始化期间 ready 不可达，继续轮询', e && e.message)
     }
     await new Promise(r => setTimeout(r, pollMs))
   }

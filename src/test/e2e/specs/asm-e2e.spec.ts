@@ -62,12 +62,13 @@ test.describe('ASM 黑盒验收 G 段', () => {
     await hp.goto();
 
     // 粒度=分钟（分钟桶延迟 +10s，近 30min 窗必有数据；默认 HOUR 首桶未闭环会空）
-    await page.locator('.asm-filter input[type="radio"][value="MINUTE"]').check();
+    await page.locator('.asm-filter .el-radio-button').filter({ hasText: /^分钟$/ }).click();  // 正则全匹配：避免「5分钟」子串命中
     // 时间窗 = 近 30min（壁钟，前端直接传后端）
     const now = new Date();
-    const times = page.locator('.asm-filter input[type="datetime-local"]');
-    await times.nth(0).fill(toLocalInput(new Date(now.getTime() - 30 * 60 * 1000)));
-    await times.nth(1).fill(toLocalInput(new Date(now.getTime() + 60 * 1000)));
+    // el-date-picker datetimerange：两个 .el-range-input，fill 用显示格式（空格分隔，非 T；emit 才归一为线上 T 串）
+    const times = page.locator('.asm-filter .el-range-input');
+    await times.nth(0).fill(toLocalInput(new Date(now.getTime() - 30 * 60 * 1000)).replace('T', ' '));
+    await times.nth(1).fill(toLocalInput(new Date(now.getTime() + 60 * 1000)).replace('T', ' '));
     // 勾选参数池首个候选（stat-params 实际返回，mask 过滤后首个必可物化 MINUTE）
     const firstCheck = page.locator('.asm-params input[type="checkbox"]').first();
     await expect(firstCheck).toBeAttached();
@@ -75,8 +76,8 @@ test.describe('ASM 黑盒验收 G 段', () => {
     await page.getByRole('button', { name: '查询', exact: true }).click();
 
     // 明细表出行 + echarts canvas 出图
-    await expect(page.locator('.asm-page > .asm-table tbody tr').first()).toBeVisible({ timeout: 20_000 });
-    const rowCount = await page.locator('.asm-page > .asm-table tbody tr').count();
+    await expect(page.locator('.el-table__body-wrapper tbody .el-table__row').first()).toBeVisible({ timeout: 20_000 });
+    const rowCount = await page.locator('.el-table__body-wrapper tbody .el-table__row').count();
     expect(rowCount, '历史明细行应 >0').toBeGreaterThan(0);
     await expect(page.locator('.asm-chart canvas')).toBeVisible();
     // 分页器出现（series 有数据才渲染）
@@ -129,7 +130,7 @@ test.describe('ASM 黑盒验收 G 段', () => {
     async function openDurationInput(): Promise<import('@playwright/test').Locator> {
       await row.getByRole('button', { name: '编辑' }).click();
       await expect(dialog).toBeVisible();
-      const input = dialog.locator('.el-form-item', { hasText: 'duration' }).locator('.el-input-number input');
+      const input = dialog.locator('.el-form-item', { hasText: '持续时长' }).locator('.el-input-number input');
       await expect(input).toBeVisible();
       return input;
     }
@@ -155,56 +156,56 @@ test.describe('ASM 黑盒验收 G 段', () => {
     expect(errors, `不应有 console error/pageerror: ${errors.join(' | ')}`).toEqual([]);
   });
 
-  test('G2-control 下发排风扇 speed=low 回查终态 SUCCESS 并还原 off @g2', async ({ page }) => {
+  test('G2-control 下发排风扇 speed=low 回查终态 成功 并还原 off @g2', async ({ page, request }) => {
+    // 2026-09-02 控制记录页重设计：执行控件移除（职责归设备控制页），下发走控制 API（与
+    // AsmDeviceControl executor 同端点同 body）；记录页纯查询（「查询」承担重查，刷新按钮已删）。
+    const token = await apiLogin(request, ADMIN_USER, ADMIN_PASS);
+    const auth = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
+    const exec = (value: string) => request.post(`${API}/asm-monitor/control`, {
+      headers: auth, data: { uid: FAN_UID, attrId: FAN_ATTR, value } });
+    expect((await (await exec('low')).json()).code, 'API 下发 low 应受理').toBe(200);
+
     const cp = new AsmBasePage(page, 'control_list');
     await cp.goto();
-
-    await page.locator('.asm-filter select').nth(0).selectOption(FAN_UID);
-    await page.locator('.asm-filter select').nth(1).selectOption(FAN_ATTR);
-    await page.locator('.asm-filter input[placeholder*="写值"]').fill('low');
-    await page.getByRole('button', { name: '执行控制' }).click();
-
-    // 轮询终态（PENDING→异步写回，秒级）。列序：0 id /1 时刻 /2 来源 /3 调用方 /4 设备 /5 参数
-    //   /6 动作 /7 执行前 /8 请求值 /9 执行后 /10 结果
-    // 扫全行按（请求=low 且 SUCCESS 且 REMOTE）定位本次下发行——同秒多行时 first() 可能命中历史 LOCAL 行。
-    const refreshBtn = page.getByRole('button', { name: /刷新（PENDING 终态回查）/ });
+    // 轮询终态（PENDING→异步写回，秒级）。新列序（0 起，记录ID 列已删）：
+    // 0 时刻 /1 来源 /2 调用方 /3 设备 /4 参数 /5 动作 /6 执行前 /7 请求值 /8 执行后 /9 结果 /10 耗时ms
+    // 来源/结果已中文化（远程/成功）。扫全行按（请求=low 且 成功 且 远程）定位本次下发行。
+    const queryBtn = page.getByRole('button', { name: '查询', exact: true });
     let lowRowIdx = -1;
     await expect
       .poll(async () => {
-        await refreshBtn.click();
+        await queryBtn.click();
         const rows = page.locator('.el-table__row', { hasText: FAN_ATTR });
         const n = await rows.count();
         for (let i = 0; i < n; i++) {
           const tds = rows.nth(i).locator('td');
-          const origin = ((await tds.nth(2).innerText()) || '').trim();
-          const req = ((await tds.nth(8).innerText()) || '').trim();
-          const res = ((await tds.nth(10).innerText()) || '').trim();
-          if (origin === 'REMOTE' && req === 'low' && res === 'SUCCESS') { lowRowIdx = i; return 'ok'; }
+          const origin = ((await tds.nth(1).innerText()) || '').trim();
+          const req = ((await tds.nth(7).innerText()) || '').trim();
+          const res = ((await tds.nth(9).innerText()) || '').trim();
+          if (origin === '远程' && req === 'low' && res === '成功') { lowRowIdx = i; return 'ok'; }
         }
         return `not-found(${n} rows)`;
-      }, { timeout: 60_000, message: '60s 内应有 REMOTE/low/SUCCESS 行' })
+      }, { timeout: 60_000, message: '60s 内应有 远程/low/成功 行' })
       .toBe('ok');
-    // 终态断言：SUCCESS 且 after 非空（E1 语义：终态 SUCCESS 时 after=执行后值）
+    // 终态断言：成功 且 after 非空（E1 语义：终态成功时 after=执行后值）
     const cells = page.locator('.el-table__row', { hasText: FAN_ATTR }).nth(lowRowIdx).locator('td');
-    expect(((await cells.nth(9).innerText()) || '').trim(), 'SUCCESS 行 after 应非空').not.toBe('');
+    expect(((await cells.nth(8).innerText()) || '').trim(), '成功 行 after 应非空').not.toBe('');
 
-    // 还原 off
-    await page.locator('.asm-filter input[placeholder*="写值"]').fill('off');
-    await page.getByRole('button', { name: '执行控制' }).click();
-    // 低风/还原两行 created_at 同秒，列表排序并列时首行不稳定 → 扫全行找「请求=off 且 SUCCESS」
+    // 还原 off（API 下发）；低风/还原两行同秒并列 → 扫全行找「请求=off 且 成功」
+    expect((await (await exec('off')).json()).code, 'API 下发 off 应受理').toBe(200);
     await expect
       .poll(async () => {
-        await refreshBtn.click();
+        await queryBtn.click();
         const rows = page.locator('.el-table__row', { hasText: FAN_ATTR });
         const n = await rows.count();
         for (let i = 0; i < n; i++) {
           const tds = rows.nth(i).locator('td');
-          const req = ((await tds.nth(8).innerText()) || '').trim();
-          const res = ((await tds.nth(10).innerText()) || '').trim();
-          if (req === 'off' && res === 'SUCCESS') return 'off-success';
+          const req = ((await tds.nth(7).innerText()) || '').trim();
+          const res = ((await tds.nth(9).innerText()) || '').trim();
+          if (req === 'off' && res === '成功') return 'off-success';
         }
         return `not-found(${n} rows)`;
-      }, { timeout: 60_000, message: '还原 off 行应出现且终态 SUCCESS' })
+      }, { timeout: 60_000, message: '还原 off 行应出现且终态 成功' })
       .toBe('off-success');
   });
 
@@ -284,6 +285,12 @@ test.describe('ASM 黑盒验收 G 段', () => {
       // 注意不能走 AsmBasePage.goto（等 .asm-page 挂载）：无权限账号集成路由不注册（webintegration 拉取被拒），
       // monitor 路由 404 是**预期**，只断言「数据卡片为 0」（不渲染任何站房数据）。
       const mp = new AsmBasePage(page, 'monitor');
+      // storageState 使 context 自带 admin 登录态（ruoyi-vue3 token 存 **Cookie**，非 localStorage——
+      // 实证 localStorage 空而守卫仍放行）：切 403 账号须 context 级清 cookie+localStorage 双清。
+      await page.context().clearCookies();
+      await page.goto('/');
+      await page.waitForLoadState('load');
+      await page.evaluate(() => localStorage.clear());
       await page.goto('/#/login');
       await page.waitForLoadState('load');
       await mp.login(userName, userPass);

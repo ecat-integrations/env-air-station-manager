@@ -1,61 +1,67 @@
 <template>
   <!--
-    控制记录（路由 name=control_list）：REMOTE 控制执行 + 审计历史列表。
+    控制记录（路由 name=control_list）：控制审计历史只读查询页。
     列表读 GET /asm-monitor/control-record/list（时间窗/uid/origin/result 过滤+分页）；
-    执行后自动刷新列表；PENDING 行为异步终态——「刷新」按钮手动回查（无自动轮询，避免后台空转）。
+    执行下发职责归设备控制页（device_control，card 墙 + SSE 终态徽章）；PENDING 行为异步终态——
+    「查询」重查对齐（无自动轮询，避免后台空转）。
   -->
   <div class="asm-page">
-    <div class="asm-toolbar"><span class="asm-title">站房设备控制</span></div>
+    <div class="asm-toolbar"><span class="asm-title">控制记录</span></div>
 
-    <div class="asm-filter">
+    <!-- @submit.prevent：包进 el-form 后阻原生隐式提交（Enter 整页刷新），旧裸 div 无此风险 -->
+    <el-form class="asm-filter" :inline="true" @submit.prevent>
       <div class="asm-row">
-        <span class="asm-label">设备</span>
-        <select v-model="form.uid">
-          <option value="">请选择</option>
-          <option v-for="d in devices" :key="d.logicDeviceUniqueId" :value="d.logicDeviceUniqueId">
-            {{ d.logicDeviceUniqueId }}
-          </option>
-        </select>
-        <span class="asm-label">参数</span>
-        <select v-model="form.attrId">
-          <option value="">请选择</option>
-          <option v-for="a in currentAttrs" :key="a.attrId" :value="a.attrId">{{ a.attrId }}</option>
-        </select>
-        <span class="asm-label">值</span>
-        <input v-model="form.value" placeholder="写值 / 选项 key" style="width: 140px" />
-        <button class="asm-btn primary" :disabled="!form.uid || !form.attrId || !form.value || executing" @click="execute">
-          {{ executing ? '执行中…' : '执行控制' }}
-        </button>
+        <el-form-item label="时间">
+          <el-date-picker
+            v-model="timeRange"
+            type="datetimerange"
+            value-format="YYYY-MM-DDTHH:mm:ss"
+            :default-time="defaultTimeRange"
+            start-placeholder="开始时间"
+            end-placeholder="结束时间"
+          />
+        </el-form-item>
+        <el-form-item label="设备">
+          <el-select v-model="filter.uid" filterable clearable placeholder="全部设备" style="width: 200px">
+            <el-option v-for="o in deviceOptions" :key="o.value" :label="o.label" :value="o.value" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="来源">
+          <el-select v-model="filter.origin" clearable placeholder="全部来源" style="width: 110px">
+            <el-option v-for="o in ORIGIN_OPTIONS" :key="o.value" :label="o.label" :value="o.value" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="结果">
+          <el-select v-model="filter.result" clearable placeholder="全部结果" style="width: 110px">
+            <el-option v-for="o in RESULT_OPTIONS" :key="o.value" :label="o.label" :value="o.value" />
+          </el-select>
+        </el-form-item>
+        <el-form-item>
+          <el-button type="primary" :disabled="loading" @click="search">查询</el-button>
+        </el-form-item>
       </div>
-      <div class="asm-row">
-        <span class="asm-label">时间</span>
-        <input type="datetime-local" step="1" v-model="filter.start" />
-        <span>~</span>
-        <input type="datetime-local" step="1" v-model="filter.end" />
-        <span class="asm-label">来源</span>
-        <select v-model="filter.origin">
-          <option value="">全部</option>
-          <option value="REMOTE">REMOTE</option>
-          <option value="LOCAL">LOCAL</option>
-        </select>
-        <span class="asm-label">结果</span>
-        <select v-model="filter.result">
-          <option value="">全部</option>
-          <option v-for="r in RESULTS" :key="r" :value="r">{{ r }}</option>
-        </select>
-        <button class="asm-btn primary" :disabled="loading" @click="search">查询</button>
-        <button class="asm-btn" :disabled="loading" @click="loadList">刷新（PENDING 终态回查）</button>
-      </div>
-    </div>
+    </el-form>
 
-    <el-table :data="rows" v-loading="loading || executing" size="small" border>
-      <el-table-column prop="id" label="记录ID" width="80" />
+    <el-table :data="rows" v-loading="loading" size="small" border>
       <el-table-column label="时刻" width="170">
         <template #default="{ row }">{{ formatLocalDateTime(row.createdAt) }}</template>
       </el-table-column>
-      <el-table-column prop="origin" label="来源" width="90" />
+      <el-table-column label="来源" width="90">
+        <template #default="{ row }">{{ originLabel(row.origin) }}</template>
+      </el-table-column>
       <el-table-column prop="caller" label="调用方" min-width="120" show-overflow-tooltip />
-      <el-table-column prop="logicDeviceUniqueId" label="设备" min-width="170" show-overflow-tooltip />
+      <el-table-column label="设备" min-width="170">
+        <template #default="{ row }">
+          <!-- 中文名为主显；悬浮显 raw uniqueId（uid 是 API 过滤键，记录行须可溯源） -->
+          <el-tooltip
+            :disabled="uidLabel(row.logicDeviceUniqueId) === row.logicDeviceUniqueId"
+            :content="row.logicDeviceUniqueId"
+            placement="top"
+          >
+            <span>{{ uidLabel(row.logicDeviceUniqueId) }}</span>
+          </el-tooltip>
+        </template>
+      </el-table-column>
       <el-table-column prop="attrId" label="参数" min-width="110" />
       <el-table-column prop="action" label="动作" width="90" />
       <el-table-column prop="beforeValue" label="执行前" min-width="120" show-overflow-tooltip />
@@ -63,39 +69,86 @@
       <el-table-column prop="afterValue" label="执行后" min-width="120" show-overflow-tooltip />
       <el-table-column label="结果" width="100">
         <template #default="{ row }">
-          <el-tag :type="resultTag(row.result)" size="small">{{ row.result }}</el-tag>
+          <!-- 失败/超时行错误详情不占列：悬浮结果 tag 查看（无错误时 tooltip 关闭） -->
+          <el-tooltip :disabled="!row.error" :content="row.error || ''" placement="top">
+            <el-tag :type="resultTag(row.result)" size="small">{{ resultLabel(row.result) }}</el-tag>
+          </el-tooltip>
         </template>
       </el-table-column>
       <el-table-column prop="durationMs" label="耗时ms" width="90" />
-      <el-table-column prop="error" label="错误" min-width="160" show-overflow-tooltip />
     </el-table>
-    <div class="asm-pager">
-      <button class="asm-btn" :disabled="filter.pageNum <= 1 || loading" @click="turn(-1)">上一页</button>
-      <span>第 {{ filter.pageNum }} 页 / 共 {{ total }} 条</span>
-      <button class="asm-btn" :disabled="!hasNext || loading" @click="turn(1)">下一页</button>
-    </div>
+    <el-pagination
+      style="margin-top: 10px"
+      small
+      layout="total, prev, pager, next"
+      :total="total"
+      :page-size="filter.pageSize"
+      :current-page="filter.pageNum"
+      :disabled="loading"
+      @current-change="onPageChange"
+    />
   </div>
 </template>
 
 <script>
 // keep-alive 契约：Options API 组件 name 必须等于路由 name（control_list），宿主 keep-alive 按组件名匹配缓存。
 
-import { executeControl, getSnapshot, listControlRecords } from '@/api/asm'
+import { listControlRecords } from '@/api/asm'
 import { formatLocalDateTime, formatLocalInputSeconds } from '@/utils/datetime'
+import { labelOf, typeOf } from '../stationParamMeta'
 
-const RESULTS = ['PENDING', 'SUCCESS', 'FAILED', 'TIMEOUT']
+// uniqueId→中文槽名转换表（本页专用，stationParamMeta 只有 枚举名→中文，缺 uid 维度）。
+// uid 公式与后端 StationParamMeta#getUniqueId 一致：logicdevice_station. + 槽键小写（槽键=typeOf(枚举名)）；
+// 中文名=labelOf(枚举名)（多实例槽各自中文名：空调1/空调2、SO2标气…）。两个真相源都在
+// stationParamMeta.js，此处仅枚举 37 槽枚举名做展开（键集与 META 逐一对照维护）；
+// 未知 uid 如实显原串（严格模式不猜）。选项序=枚举序（同 sidebar 分组序）。
+const STATION_UID_PREFIX = 'logicdevice_station.'
+const SLOT_ENUM_NAMES = [
+  'TH', 'CLEANLINESS', 'INDOOR_POLLUTANT',
+  'POWER_METER', 'VOLTAGE_REGULATOR', 'UPS',
+  'AIR_CONDITIONER_AC1', 'AIR_CONDITIONER_AC2', 'EXHAUST_FAN', 'LIGHTING',
+  'SAMPLING_TUBE', 'ZERO_GAS_RELAY', 'STANDARD_GAS_SO2', 'STANDARD_GAS_CO', 'STANDARD_GAS_NOX',
+  'CALIBRATOR',
+  'FILTER_CHANGER_SO2', 'FILTER_CHANGER_CO', 'FILTER_CHANGER_O3', 'FILTER_CHANGER_NOX',
+  'VALVE_GROUP_SO2', 'VALVE_GROUP_CO', 'VALVE_GROUP_NO', 'VALVE_GROUP_O3',
+  'PM_ZERO_CHECK_PM10', 'PM_ZERO_CHECK_PM25',
+  'CUTTER_CHANGER_PM10', 'CUTTER_CHANGER_PM25',
+  'PAPER_TAPE_PM10', 'PAPER_TAPE_PM25',
+  'SECURITY_ALARM', 'ELECTRONIC_FENCE', 'ACCESS_CONTROL',
+  'CAMERA_1', 'CAMERA_2', 'CAMERA_3', 'CAMERA_4',
+]
+const DEVICE_OPTIONS = SLOT_ENUM_NAMES.map((name) => ({
+  value: STATION_UID_PREFIX + typeOf(name).toLowerCase(),
+  label: labelOf(name),
+}))
+const UID_LABELS = DEVICE_OPTIONS.reduce((m, o) => { m[o.value] = o.label; return m }, {})
+
+// 来源/结果枚举中文映射：value 原样透传后端（过滤参数+行数据），仅展示层翻译
+const ORIGIN_OPTIONS = [
+  { value: 'REMOTE', label: '远程' },
+  { value: 'LOCAL', label: '本地' },
+]
+const RESULT_OPTIONS = [
+  { value: 'PENDING', label: '执行中' },
+  { value: 'SUCCESS', label: '成功' },
+  { value: 'FAILED', label: '失败' },
+  { value: 'TIMEOUT', label: '超时' },
+]
+const ORIGIN_LABELS = ORIGIN_OPTIONS.reduce((m, o) => { m[o.value] = o.label; return m }, {})
+const RESULT_LABELS = RESULT_OPTIONS.reduce((m, o) => { m[o.value] = o.label; return m }, {})
 
 export default {
   name: 'control_list',
   data() {
     const now = new Date()
     return {
-      RESULTS,
-      devices: [],
-      form: { uid: '', attrId: '', value: '' },
+      ORIGIN_OPTIONS,
+      RESULT_OPTIONS,
+      deviceOptions: DEVICE_OPTIONS,
       filter: {
         start: formatLocalInputSeconds(new Date(now.getTime() - 24 * 3600 * 1000)),
         end: formatLocalInputSeconds(now),
+        uid: '',
         origin: '',
         result: '',
         pageNum: 1,
@@ -104,25 +157,24 @@ export default {
       rows: [],
       total: 0,
       loading: false,
-      executing: false,
+      // datetimerange 面板只挑日期（未选时刻）时的默认时刻；默认时间窗本身由上面 start/end 初始化决定
+      defaultTimeRange: [new Date(2000, 0, 1, 0, 0, 0), new Date(2000, 0, 1, 23, 59, 59)],
     }
   },
   computed: {
-    currentAttrs() {
-      const d = this.devices.find((x) => x.logicDeviceUniqueId === this.form.uid)
-      return d ? d.attrs : []
-    },
-    hasNext() {
-      return this.filter.pageNum * this.filter.pageSize < this.total
-    },
-  },
-  watch: {
-    'form.uid'() {
-      this.form.attrId = ''
+    // el-date-picker datetimerange 绑定 [start, end] 数组；getter/setter 与 filter.start/end 两字段互拆，
+    // 提交口径不变（壁钟串 'YYYY-MM-DDTHH:mm:ss' 原样透传，value-format 同串保证逐字节不变）。清空置空串与旧 input 清空一致。
+    timeRange: {
+      get() {
+        return [this.filter.start, this.filter.end]
+      },
+      set(v) {
+        this.filter.start = (v && v[0]) || ''
+        this.filter.end = (v && v[1]) || ''
+      },
     },
   },
   mounted() {
-    getSnapshot().then((res) => { this.devices = (res && res.data) || [] }).catch(() => {})
     this.loadList()
   },
   methods: {
@@ -130,8 +182,18 @@ export default {
     resultTag(r) {
       return { SUCCESS: 'success', FAILED: 'danger', TIMEOUT: 'warning', PENDING: 'info' }[r] || 'info'
     },
-    turn(delta) {
-      this.filter.pageNum += delta
+    // 展示层枚举翻译：未知值如实显原串（与 labelOf 同纪律）
+    uidLabel(uid) {
+      return UID_LABELS[uid] || uid
+    },
+    originLabel(v) {
+      return ORIGIN_LABELS[v] || v
+    },
+    resultLabel(v) {
+      return RESULT_LABELS[v] || v
+    },
+    onPageChange(page) {
+      this.filter.pageNum = page
       this.loadList()
     },
     search() {
@@ -144,6 +206,7 @@ export default {
         const res = await listControlRecords({
           start: this.filter.start,
           end: this.filter.end,
+          uid: this.filter.uid,
           origin: this.filter.origin,
           result: this.filter.result,
           pageNum: this.filter.pageNum,
@@ -154,21 +217,6 @@ export default {
         this.total = data.total || 0
       } finally {
         this.loading = false
-      }
-    },
-    async execute() {
-      this.executing = true
-      try {
-        const res = await executeControl({ uid: this.form.uid, attrId: this.form.attrId, value: this.form.value })
-        const rec = (res && res.data) || {}
-        if (rec.result !== 'SUCCESS') {
-          this.$message && this.$message.warning('控制未成功终态：' + rec.result + (rec.error ? ' / ' + rec.error : ''))
-        }
-        // 执行后回拉列表（窗口内最新行置顶；PENDING 终态由「刷新」按钮回查）
-        this.filter.pageNum = 1
-        await this.loadList()
-      } finally {
-        this.executing = false
       }
     },
   },
@@ -182,9 +230,4 @@ export default {
 .asm-filter { border: 1px solid #ebeef5; border-radius: 6px; padding: 10px 12px; margin-bottom: 12px; }
 .asm-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
 .asm-row:last-child { margin-bottom: 0; }
-.asm-label { color: #606266; font-size: 13px; }
-.asm-btn { padding: 4px 14px; border: 1px solid #dcdfe6; border-radius: 4px; background: #fff; cursor: pointer; }
-.asm-btn.primary { background: #409eff; color: #fff; }
-.asm-btn:disabled { opacity: .6; }
-.asm-pager { display: flex; align-items: center; gap: 12px; margin-top: 10px; color: #606266; }
 </style>

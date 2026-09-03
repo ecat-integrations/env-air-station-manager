@@ -24,7 +24,9 @@
         start_time, end_time, description, status, last_breach_time, result_content, created_at
     </sql>
 
-    <!-- 新 episode 落 ACTIVE 行：start_time=首触发，end_time=null（活跃中无结束时刻），last_breach_time=now。 -->
+    <!-- episode 落行（bug-record-20260902-183355 修复）：ACTIVE 行 end_time=null（活跃中无结束时刻，
+         评估器不置值）；恢复行（POWER 恢复路径）评估器已置 endTime——曾硬编码 null 把它丢弃，致恢复行
+         默认列表不可见、recover_time/duration_ms 恒 null，已按实体值落列（两种行同一 insert）。 -->
     <insert id="insert" parameterType="com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmAlarmRecord"
             useGeneratedKeys="true" keyProperty="id">
         insert into asm_alarm_record
@@ -33,7 +35,8 @@
         values
             (#{alarmType}, #{ruleName}, #{logicDeviceUniqueId}, #{attrId}, #{severity},
              #{startTime, typeHandler=com.ecat.integration.EnvAirStationManagerIntegration.support.TimestamptzInstantTypeHandler},
-             null, #{description}, #{status},
+             #{endTime, typeHandler=com.ecat.integration.EnvAirStationManagerIntegration.support.TimestamptzInstantTypeHandler},
+             #{description}, #{status},
              #{lastBreachTime, typeHandler=com.ecat.integration.EnvAirStationManagerIntegration.support.TimestamptzInstantTypeHandler},
              #{resultContent}, now())
     </insert>

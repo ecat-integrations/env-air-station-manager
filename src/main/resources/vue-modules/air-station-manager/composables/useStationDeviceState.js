@@ -25,12 +25,17 @@ export function useStationDeviceState() {
       .filter(g => g.items.length > 0)
   })
 
+  // 引用标注——全站唯一推导点（设计统一，不分叉）：某物理设备被哪些类型槽引用是 params 数据
+  // （boundDeviceId）的纯函数，此处算一次并转中文标签；详情页 referencedBy 与更换设备对话框
+  // 的 refs 都消费它（后端不下发 referencingParams——曾前后端各算一遍属分叉复制，已收口）。
+  const referencingLabels = (boundDeviceId, excludeParam) => paramBindings.value
+    .filter(p => p.boundDeviceId === boundDeviceId && p.param !== excludeParam)
+    .map(p => labelOf(p.param))
+
   // 引用标注（前端纯计算）：同 boundDeviceId 的其他类型槽（一台物理设备可被多槽复用）
   const referencedBy = computed(() => {
     if (!selected.value || !selected.value.boundDeviceId) return []
-    return paramBindings.value
-      .filter(p => p.param !== selected.value.param && p.boundDeviceId === selected.value.boundDeviceId)
-      .map(p => labelOf(p.param))
+    return referencingLabels(selected.value.boundDeviceId, selected.value.param)
   })
 
   async function refresh() {
@@ -69,7 +74,7 @@ export function useStationDeviceState() {
 
   return {
     paramBindings, loaded, loadError, selected, detailData,
-    groups, referencedBy,
+    groups, referencedBy, referencingLabels,
     refresh, selectParam, loadDetail,
   }
 }

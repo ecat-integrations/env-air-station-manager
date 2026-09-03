@@ -17,6 +17,8 @@ import { test, expect } from '@playwright/test';
 import { AsmBasePage, attachErrorCollectors } from '../helpers/page-objects/AsmBasePage';
 
 const API = process.env.API_BASE_URL || 'http://localhost:8080';
+/** ruoyi 前端基址（vite 8081，/dev-api 代理→8080）。 */
+const WEB = process.env.WEB_BASE_URL || 'http://localhost:8081';
 const ADMIN_USER = process.env.ASM_USER || 'Admin7s9k2G5';
 const ADMIN_PASS = process.env.ASM_PASS || '7sK2pG9dR3tQ';
 
@@ -211,12 +213,129 @@ test.describe('ASM G12 站房设备配置管理', () => {
       data: { physicalDeviceId: originalIdHolder.id, oldDeviceId: afterUb.boundDeviceId },
     });
     expect((await bd.json()).code, 'bindExisting 还原应成功').toBe(200);
+
     const restored = (await getParams(request, token)).find(p => p.param === CHAIN_TYPE)!;
     expect(restored.configured, '还原后应 CONFIGURED').toBe(true);
     expect(restored.boundDeviceId, '还原后应绑回原设备').toBe(originalIdHolder.id);
   });
 
-  test('G12-3 复用探测：ac1 兼容设备列表含当前已绑台 @g12-3', async ({ request }) => {
+  /**
+   * G12-2m 多实例槽绑定链（bug-record-20260902-110219 主缺陷的 e2e 级守卫，09-02）：
+   * G12-2 只走单实例槽（LIGHTING），抓不到「多实例共享 deviceType 键覆盖 → pm10 配置绑到
+   * pm25」类错位（该缺陷因此存活 12 天，由单测 multiInstanceSlotProfilesCarryOwnStationParam
+   * 先锁）。本用例补 e2e 纵深：CUTTER_CHANGER.pm10（qdrgdz/QGQGHZZ，真实串口模拟器
+   * ttyUSB159=ecat 侧）完整 provision(add)→submit×N→CREATE_ENTRY——**落槽断言**：
+   * pm10 变 CONFIGURED 且 pm25 保持原绑定不变（错位实现必挂：pm10 仍 UNBOUND 而 pm25
+   * title 变测试机）→ unbind 还原 UNBOUND + 测试物理 entry 清理。
+   */
+  test('G12-2m 多实例槽完整绑定链落槽正确（CUTTER_CHANGER.pm10/qdrgdz 真实模拟器；pm25 不受扰） @g12-2', async ({ page, request }) => {
+    const errors: string[] = [];
+    attachErrorCollectors(page, errors);
+    const token = await apiLogin(request, ADMIN_USER, ADMIN_PASS);
+    const auth = { Authorization: `Bearer ${token}` };
+    const M_TYPE = 'CUTTER_CHANGER.pm10';
+    const M_SN = 'E2E-G12M-CUT-001';
+    const M_NAME = 'E2E多实例槽链路测试机';
+
+    // ── 前置：pm10 可绑定（非 CONFIGURED）；pm25 原绑定快照（不受扰锚点） ──
+    const rows0 = await getParams(request, token);
+    const pm10Before = rows0.find(p => p.param === 'CUTTER_CHANGER_PM10')!;
+    expect(pm10Before.configured, '前提：pm10 初始未配置').toBe(false);
+    const pm25Before = rows0.find(p => p.param === 'CUTTER_CHANGER_PM25')!;
+    expect(pm25Before.configured, '前提：pm25 初始已配置').toBe(true);
+
+    // ── provision(add)：driver 快进身份步停首个连接步 ──
+    const provRes = await request.post(`${API}/asm-monitor/device/params/${encodeURIComponent(M_TYPE)}/provision`, {
+      headers: { ...auth, 'Content-Type': 'application/json' },
+      data: { coordinate: 'com.ecat:integration-qdrgdz', model: 'QGQGHZZ',
+        sn: M_SN, name: M_NAME, operation: 'add' },
+    });
+    const prov = (await provRes.json()).data;
+    expect(prov.status, `provision 应 NEED_USER_INPUT: ${JSON.stringify(prov).slice(0, 200)}`).toBe('NEED_USER_INPUT');
+
+    // ── submit×N：schema 默认值 + 显式连接参数（RTU/ttyUSB159=切割器模拟器 ecat 侧） ──
+    let stepId: string = prov.stoppedStepId;
+    let r = prov;
+    for (let i = 0; i < 12; i++) {
+      const overrides: Record<string, any> = {
+        sn: M_SN, name: M_NAME, model: 'QGQGHZZ',
+        modbus_protocol: 'RTU', confirmed: true,
+        // qdrgdz 串口步的 serial_settings 是嵌套 group（子键对照向导确认页 dump）
+        serial_settings: { serial_port: 'ttyUSB159', baudrate: '9600', data_bits: '8',
+          stop_bits: '1', parity: 'None', flow_control: '0', timeout: 500 },
+      };
+      const userInput = fillFromSchema(r.schema, overrides);
+      const res = await request.post(`${API}/asm-monitor/device/flow/${prov.flowId}/submit`, {
+        headers: { ...auth, 'Content-Type': 'application/json' },
+        data: { stepId, userInput },
+      });
+      r = (await res.json()).data;
+      expect(Object.keys(r.errors || {}).length, `步骤 ${stepId} 不应有校验错误: ${JSON.stringify(r.errors)}`).toBe(0);
+      if (r.type === 'CREATE_ENTRY') break;
+      expect(r.type, `应 SHOW_FORM 或 CREATE_ENTRY，实=${r.type}`).toBe('SHOW_FORM');
+      stepId = r.stepId;
+    }
+    expect(r.type, 'flow 应走完 CREATE_ENTRY').toBe('CREATE_ENTRY');
+
+    // ── 落槽断言（缺陷核心：发起槽 pm10 得到绑定，兄弟槽 pm25 分毫不动） ──
+    const rows1 = await getParams(request, token);
+    const pm10After = rows1.find(p => p.param === 'CUTTER_CHANGER_PM10')!;
+    expect(pm10After.configured, '绑定后 pm10 应 CONFIGURED（错位实现此处=UNBOUND 即缺陷复发）').toBe(true);
+    expect(pm10After.title, 'pm10 绑定设备名应为测试机').toBe(M_NAME);
+    const pm25After = rows1.find(p => p.param === 'CUTTER_CHANGER_PM25')!;
+    expect(pm25After.boundDeviceId, `pm25 必须保持原绑定不受扰（错位实现会绑走测试机）: ${JSON.stringify(pm25After)}`)
+      .toBe(pm25Before.boundDeviceId);
+
+    // ── 浏览器徽标：PM10切割器（非 PM2.5）出现 ✓ ──
+    const base = new AsmBasePage(page, 'station_device');
+    await base.goto();
+    const itemM = page.locator('.sidebar .param-item', { hasText: 'PM10切割器' }).first();
+    await expect(itemM.locator('.param-check'), 'pm10 徽标应变已配置').toBeVisible();
+    expect(errors, `不应有 console error/pageerror: ${errors.join(' | ')}`).toEqual([]);
+
+    // ── unbind 还原：pm10 回 UNBOUND（entry 存在的曾配置态），pm25 仍原绑定 ──
+    const ub = await request.post(`${API}/asm-monitor/device/params/${encodeURIComponent(M_TYPE)}/unbind`, { headers: auth });
+    expect((await ub.json()).code).toBe(200);
+    const rows2 = await getParams(request, token);
+    const pm10Restored = rows2.find(p => p.param === 'CUTTER_CHANGER_PM10')!;
+    expect(pm10Restored.state, 'unbind 后 pm10 应 UNBOUND（还原初始曾配置态）').toBe('UNBOUND');
+    expect(rows2.find(p => p.param === 'CUTTER_CHANGER_PM25')!.boundDeviceId,
+      'unbind 后 pm25 仍保持原绑定').toBe(pm25Before.boundDeviceId);
+
+    // ── 测试物理 entry 清理：unbind 后无引用应已收口移除；兜底显式删（core-api） ──
+    const coreLogin = await request.post('http://localhost:9999/core-api/auth/login', {
+      data: { username: 'admin', password: 'admin@123' } });
+    const coreTok = (await coreLogin.json()).data.token;
+    const devList = await request.get('http://localhost:9999/core-api/devices?pageNum=1&pageSize=500',
+      { headers: { Authorization: `Bearer ${coreTok}` } });
+    const testDev = ((await devList.json()).data || []).find((d: any) => d.uniqueId === `qdrgdz_weather.sensor_${M_SN}`);
+    if (testDev) {
+      // 无引用未自动移除时兜底：按 entryId 显式删（静默改数据类操作，仅测试自有产物）
+      const cfgList = await request.get('http://localhost:9999/core-api/config-flow/entries?pageNum=1&pageSize=500',
+        { headers: { Authorization: `Bearer ${coreTok}` } });
+      const cfgs = (await cfgList.json()).data || [];
+      const testCfg = Array.isArray(cfgs) && cfgs.find((c: any) => String(c.uniqueId || '').includes(M_SN));
+      if (testCfg) {
+        await request.delete(`http://localhost:9999/core-api/config-flow/entries/${testCfg.entryId}`,
+          { headers: { Authorization: `Bearer ${coreTok}` } });
+      }
+    }
+    const devList2 = await request.get('http://localhost:9999/core-api/devices?pageNum=1&pageSize=500',
+      { headers: { Authorization: `Bearer ${coreTok}` } });
+    expect(((await devList2.json()).data || []).filter((d: any) => String(d.uniqueId).includes(M_SN)),
+      '测试物理 entry 应清理干净').toHaveLength(0);
+  });
+
+  /**
+   * G12-3 复用探测（09-02 升级：引用标注统一收口后改浏览器层断言）：
+   *  - API 层：ac1 兼容列表含当前已绑台（兼容端点只供设备事实，无 referencingParams——
+   *    引用关系由前端 params 数据单一推导点算，分叉已删）；
+   *  - 浏览器层（用户手动场景回归）：打开 ac1 更换设备对话框，当前已绑台条目的
+   *    「已被:[…] 引用」渲染**中文槽标签**（曾后端下发点分英文键+前端漏转换→全英文）。
+   */
+  test('G12-3 复用探测 + 引用标注中文（ac1） @g12-3', async ({ page, request }) => {
+    const errors: string[] = [];
+    attachErrorCollectors(page, errors);
     const token = await apiLogin(request, ADMIN_USER, ADMIN_PASS);
     const auth = { Authorization: `Bearer ${token}` };
     const ac1 = (await getParams(request, token)).find(p => p.param === 'AIR_CONDITIONER_AC1')!;
@@ -226,8 +345,20 @@ test.describe('ASM G12 站房设备配置管理', () => {
     expect(body.code).toBe(200);
     expect(body.data.length, 'ac1 兼容设备应非空（saimosen QCDevice-Test 在册）').toBeGreaterThan(0);
     expect(body.data.some((d: any) => d.deviceId === ac1.boundDeviceId), '当前已绑台应出现在兼容列表').toBe(true);
-    expect(body.data.some((d: any) => d.deviceId === ac1.boundDeviceId && (d.referencingParams || []).includes('AIR_CONDITIONER.ac1')),
-      '兼容条目应带 referencingParams 标注').toBe(true);
+    expect(body.data.every((d: any) => d.referencingParams === undefined),
+      '兼容端点不应再下发 referencingParams（分叉已收口）').toBe(true);
+
+    // 浏览器：ac1 → 更换设备 → 当前已绑台的引用行含中文标签（空调1 本身 + 同台其他槽中文名）
+    const base = new AsmBasePage(page, 'station_device');
+    await base.goto();
+    await page.locator('.sidebar .param-item', { hasText: '空调1' }).first().click();
+    await page.getByRole('button', { name: '更换设备' }).click();
+    const currentItem = page.locator('.reuse-item.current', { hasText: 'QCDevice' }).first();
+    await expect(currentItem).toBeVisible({ timeout: 10000 });
+    const refText = await currentItem.locator('.reuse-ref').innerText();
+    expect(refText, `引用行应含中文槽标签「空调1」，实=${refText}`).toContain('空调1');
+    expect(refText, '引用行不应残留点分英文键').not.toMatch(/[A-Z_]+\.[a-z0-9]+/);
+    expect(errors, `0 console error，实=${errors.join(' | ')}`).toHaveLength(0);
   });
 
   test('G12-4 无 asm-monitor:device:edit 角色写类端点 → HTTP 200 body code=403 @g12-4', async ({ request }) => {
@@ -275,7 +406,55 @@ test.describe('ASM G12 站房设备配置管理', () => {
       await request.delete(`${API}/system/role/${roleId}`, { headers: auth });
     }
   });
+
+  /**
+   * G12-5 启动门控=后端 initialized 信号（bugs/bug-record-20260902-110219 附带「空白页」缺陷）：
+   * 门控语义复刻 ADM stat-config.initialized——前端轮询 `/asm-monitor/device/ready` 的
+   * `initialized` 完成点信号（airstation createAllStationDevices 尾部置位；集成禁用恒 true），
+   * 而非「等首台设备出现」（零设备环境永久卡=空白页）或前端猜测式超时。
+   * 两场景（路由拦截 mock，环境无关不动真实数据）：
+   *  a) ready.initialized=true + snapshot 恒空（零设备）→ 门控放行，sidebar 渲染真实空态；
+   *  b) ready.initialized 恒 false → 门控保持关闭（骨架横幅在、sidebar 不出）——
+   *     锁「放行键是信号不是超时」：任何基于时间的放行实现都会在此场景泄漏渲染（红）。
+   */
+  test('G12-5a 门控信号就绪+零设备 → 放行渲染真实空态 @g12-5', async ({ page }) => {
+    const errors: string[] = [];
+    attachErrorCollectors(page, errors);
+    await mockGate(page, { ready: true, snapshotEmpty: true });
+    const base = new AsmBasePage(page, 'station_device');
+    await base.goto();
+    await expect(page.getByText('站房温湿度监测仪').first())
+      .toBeVisible({ timeout: 15000 });
+    expect(errors, `0 console error，实=${errors.join(' | ')}`).toHaveLength(0);
+  });
+
+  test('G12-5b 门控信号未就绪 → 保持骨架不放行（禁超时逃逸） @g12-5', async ({ page }) => {
+    const errors: string[] = [];
+    attachErrorCollectors(page, errors);
+    await mockGate(page, { ready: false, snapshotEmpty: true });
+    const base = new AsmBasePage(page, 'station_device');
+    await base.goto();
+    // 12s（> 3 个轮询周期，足以让任何「连续空 N 次放行」的超时实现逃逸）内：横幅仍在、槽不出
+    await page.waitForTimeout(12000);
+    await expect(page.getByText('系统初始化中，设备配置装载中，请稍候…')).toBeVisible();
+    await expect(page.getByText('站房温湿度监测仪').first()).toHaveCount(0);
+    expect(errors, `0 console error，实=${errors.join(' | ')}`).toHaveLength(0);
+  });
 });
+
+/** G12-5 门控 mock：/asm-monitor/device/ready 按 readyFlag 应答 initialized；snapshot 固定空数组。 */
+async function mockGate(page: import('@playwright/test').Page, opts: { ready: boolean; snapshotEmpty: boolean }) {
+  await page.route('**/dev-api/asm-monitor/device/ready*', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json',
+      body: JSON.stringify({ code: 200, msg: '操作成功', data: { initialized: opts.ready } }) });
+  });
+  if (opts.snapshotEmpty) {
+    await page.route('**/dev-api/asm-monitor/snapshot*', async (route) => {
+      await route.fulfill({ status: 200, contentType: 'application/json',
+        body: JSON.stringify({ code: 200, msg: '操作成功', data: [] }) });
+    });
+  }
+}
 
 /** G12-2 记录的原设备 id（G12-2b 还原用；串行保证跨 test 传递安全）。 */
 const originalIdHolder = { id: '' };

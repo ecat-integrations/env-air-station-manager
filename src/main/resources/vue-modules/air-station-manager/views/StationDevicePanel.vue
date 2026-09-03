@@ -1,16 +1,23 @@
 <template>
   <div class="asm-page station-device-panel">
     <!-- 启动装载门控：airstation logic 设备未就绪期间显骨架（勿把 registry 空渲染成"全部未配置"误导） -->
-    <div v-if="booting" class="asm-boot-banner">系统初始化中，设备配置装载中，请稍候…</div>
+    <el-alert
+      v-if="booting"
+      class="asm-boot-banner"
+      type="info"
+      :closable="false"
+      show-icon
+      title="系统初始化中，设备配置装载中，请稍候…"
+    />
     <header class="panel-header">
       <h1 class="panel-title">站房设备配置</h1>
       <p class="panel-sub">为 22 类站房设备（37 个类型槽）各配置物理设备并绑定到 logic station device。多实例类型（空调/标气/滤膜/摄像头等）逐槽独立配置。</p>
     </header>
 
     <p v-if="loadError" class="panel-err">加载失败:{{ loadError }}</p>
-    <p v-else-if="!loaded" class="panel-hint">加载中…</p>
 
-    <div v-else class="layout">
+    <!-- 加载态挂 layout 容器（v-loading 指令）：booting/加载中显示 spinner，loaded 后渲染 sidebar+detail -->
+    <div v-else class="layout" :class="{ 'layout-loading': !loaded }" v-loading="!loaded">
       <!-- 左 sidebar：37 类型槽分组全景 + 绑定徽标 -->
       <StationDeviceSidebar
         :groups="groups"
@@ -62,10 +69,10 @@
 // 离开 unmount→SPA 导航白屏（memory: vue-script-setup-keepalive-needs-defineoptions-name）。
 defineOptions({ name: 'station_device' })
 import { reactive, ref } from 'vue'
+import { ElMessageBox } from 'element-plus'
 import { useStationDeviceState } from '../composables/useStationDeviceState'
 import { labelOf, typeOf } from '../stationParamMeta'
 import { listCompatibleDevices, bindExisting, unbindType, waitAsmReady } from '../api/device'
-import { appConfirm, appAlert } from '../utils/appDialog'
 import StationDeviceSidebar from '../components/StationDeviceSidebar.vue'
 import StationDeviceDetail from '../components/StationDeviceDetail.vue'
 import ReuseDeviceDialog from '../components/ReuseDeviceDialog.vue'
@@ -73,7 +80,7 @@ import ConfigFlowDialog from '../components/ConfigFlowDialog.vue'
 
 const {
   loaded, loadError, selected, detailData,
-  groups, referencedBy,
+  groups, referencedBy, referencingLabels,
   refresh, selectParam,
 } = useStationDeviceState()
 
@@ -96,7 +103,10 @@ async function openReuse(mode) {
   reuseDlg.open = true
   try {
     const res = await listCompatibleDevices(typeOf(p.param))
-    reuseDlg.devices = res.data || []
+    // 引用标注注入（单一推导点 useStationDeviceState.referencingLabels 的消费方）：
+    // 兼容端点只供设备事实（deviceId/coordinate/title/uniqueId），被哪些槽引用由 params
+    // 数据推导（中文标签），不再消费后端 referencingParams（分叉已收口）。
+    reuseDlg.devices = (res.data || []).map(d => ({ ...d, refs: referencingLabels(d.deviceId) }))
   } catch (e) {
     reuseDlg.loading = false
     // 兼容列表加载失败：留空列表 + 让用户走 +配置新设备（不阻断）
@@ -123,7 +133,7 @@ async function onReuseBind(chosenId) {
     await refresh()
   } catch (e) {
     reuseDlg.busy = false
-    await appAlert('绑定失败:' + String(e.message || e))
+    await ElMessageBox.alert('绑定失败:' + String(e.message || e), '提示', { type: 'error' })
   }
 }
 
@@ -167,12 +177,21 @@ async function onCfgCompleted() {
 // ==================== 移除 ====================
 async function onUnbind() {
   const p = selected.value
-  if (!(await appConfirm(`确认移除 ${labelOf(p.param)} 的设备绑定?`))) return
+  try {
+    await ElMessageBox.confirm(`确认移除 ${labelOf(p.param)} 的设备绑定?`, '确认', {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      type: 'warning',
+    })
+  } catch {
+    // 用户点取消/ESC/关闭 → 原取消分支：不执行移除
+    return
+  }
   try {
     await unbindType(typeOf(p.param))
     await refresh()
   } catch (e) {
-    await appAlert('移除失败:' + String(e.message || e))
+    await ElMessageBox.alert('移除失败:' + String(e.message || e), '提示', { type: 'error' })
   }
 }
 
@@ -186,12 +205,13 @@ waitAsmReady().then(() => { booting.value = false; refresh() })
 
 <style scoped>
 .station-device-panel { padding: 16px; min-width: 1200px; }
-.asm-boot-banner { padding: 24px; text-align: center; color: #6b7280; font-size: 14px; background: #f9fafb; border: 1px dashed #d1d5db; border-radius: 8px; margin-bottom: 12px; }
+.asm-boot-banner { margin-bottom: 12px; }
 .panel-header { margin-bottom: 16px; }
 .panel-title { font-size: 20px; font-weight: 700; margin: 0 0 4px 0; }
 .panel-sub { color: #6b7280; font-size: 13px; margin: 0; }
-.panel-hint { color: #6b7280; font-size: 13px; }
 .panel-err { color: #dc2626; }
 
 .layout { display: flex; gap: 16px; align-items: flex-start; }
+/* 加载中给 v-loading 遮罩一个可视高度（sidebar/detail 未渲染时容器塌陷） */
+.layout.layout-loading { min-height: 240px; }
 </style>

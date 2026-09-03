@@ -9,20 +9,23 @@
     <div class="asm-toolbar">
       <span class="asm-title">站房设备总览</span>
       <span class="asm-hint">{{ sseConnected ? 'SSE 实时推送中' : '等待实时连接…' }}</span>
-      <button class="asm-btn" :disabled="loading" @click="load">手动刷新</button>
+      <el-button size="small" :disabled="loading" @click="load">手动刷新</el-button>
       <!-- 单位双模式切换（镜像 ADM AdmUnitSwitcher）：standard=STANDARD 行标准口径 / custom=MONITOR 偏好；
            切换即重拉 snapshot（后端按 unit 换算，前端零换算），选择存 localStorage 刷新恢复 -->
       <span class="asm-unit-switcher">
         <span class="asm-unit-label">显示单位:</span>
-        <button v-for="opt in UNIT_OPTIONS" :key="opt.value" type="button"
-                class="asm-unit-btn" :class="{ active: unitMode === opt.value }"
-                @click="onUnitPick(opt.value)">{{ opt.label }}</button>
-        <!-- 单位设置抽屉入口：编辑 MONITOR（自定义）行的单位与小数位；「默认」模式读 STANDARD 行不受影响 -->
-        <button type="button" class="asm-btn asm-unit-setting-btn" @click="openUnitSettings">⚙ 单位设置</button>
+        <!-- el-radio-group 仅在值实际变化时触发 @change（「同值不重拉」由组件语义保证），onUnitPick 收新值重拉 -->
+        <el-radio-group v-model="unitMode" size="small" @change="onUnitPick">
+          <el-radio-button v-for="opt in UNIT_OPTIONS" :key="opt.value" :value="opt.value" :label="opt.label" />
+        </el-radio-group>
+        <!-- 单位设置抽屉入口：编辑 MONITOR（自定义）行的单位与小数位；「默认」模式读 STANDARD 行不受影响；
+             class asm-unit-setting-btn 仅作 e2e 钩子保留（视觉已由 el-button small 接管） -->
+        <el-button size="small" class="asm-unit-setting-btn" @click="openUnitSettings">⚙ 单位设置</el-button>
       </span>
     </div>
 
-    <div v-if="sseFailed" class="asm-banner">连接断开，重连中…</div>
+    <!-- SSE 断连横幅；class asm-banner 仅作 e2e 钩子保留（视觉已由 el-alert 接管，连接健康时整块不渲染） -->
+    <el-alert v-if="sseFailed" class="asm-banner" type="warning" :closable="false" title="连接断开，重连中…" />
 
     <!-- 状态筛选 chips（sticky 于瓦片墙上方）：计数 computed 派生，SSE patch 改设备 online/alarm 后计数自然响应 -->
     <div class="asm-chips">
@@ -296,10 +299,10 @@ export default {
         this.loading = false
       }
     },
-    // 单位切换：同值不重拉；写 localStorage（try-catch 防隐私模式）后重拉 snapshot（后端按 unit 换算）
+    // 单位切换：el-radio-group 的 v-model 先更新值再触发 @change（同值点击不触发 change，
+    // 「同值不重拉」由组件语义保证）——此处不得再比对 unitMode（v-model 已改，恒等，曾把
+    // 全部重拉吞掉致 G6 挂）；持久化后重拉 snapshot（后端按 unit 换算）。
     onUnitPick(value) {
-      if (value === this.unitMode) return
-      this.unitMode = value
       try { localStorage.setItem('asm-monitor-unit', value) } catch (e) { /* 隐私模式降级内存态 */ }
       this.load()
     },
@@ -465,15 +468,9 @@ export default {
 .asm-toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
 .asm-title { font-size: 16px; font-weight: 600; }
 .asm-hint { color: #909399; font-size: 12px; }
-.asm-btn { padding: 4px 14px; border: 1px solid #dcdfe6; border-radius: 4px; background: #409eff; color: #fff; cursor: pointer; }
-.asm-btn:disabled { opacity: .6; }
+/* 单位切换容器：仅布局职责（右推 + 组内间距）；按钮/分段视觉已由 el-button / el-radio-button 接管 */
 .asm-unit-switcher { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; }
 .asm-unit-label { font-size: 13px; color: #909399; margin-right: 4px; }
-.asm-unit-btn { font-size: 13px; padding: 4px 12px; cursor: pointer; border: 1px solid #dcdfe6; background: #fff; color: #606266; border-radius: 4px; }
-.asm-unit-btn:first-of-type { border-radius: 4px 0 0 4px; }
-.asm-unit-btn:last-of-type { border-radius: 0 4px 4px 0; margin-left: -1px; }
-.asm-unit-btn.active { background: #409eff; color: #fff; border-color: #409eff; }
-.asm-banner { background: #fef0f0; color: #f56c6c; border: 1px solid #fbc4c4; border-radius: 4px; padding: 6px 12px; margin-bottom: 10px; font-size: 13px; }
 /* 状态筛选 chips：pill 徽章（element-plus 语义色）；激活态实心白字 */
 .asm-chips { position: sticky; top: 0; z-index: 5; display: flex; gap: 8px; padding: 6px 0; margin-bottom: 8px; background: inherit; }
 .asm-chip { font-size: 13px; padding: 2px 14px; border-radius: 14px; cursor: pointer; border: 1px solid #dcdfe6; background: #fff; color: #606266; }
@@ -518,7 +515,6 @@ export default {
 .asm-table th, .asm-table td { border-bottom: 1px solid #ebeef5; padding: 6px 8px; text-align: left; }
 .asm-table th { background: #fafafa; color: #606266; }
 /* 单位设置抽屉 */
-.asm-unit-setting-btn { padding: 4px 10px; margin-left: 8px; font-size: 13px; }
 .asm-unit-settings { padding: 0 4px; }
 .asm-unit-settings-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
 .asm-unit-settings-actions { margin-top: 10px; }

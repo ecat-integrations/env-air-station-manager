@@ -29,6 +29,7 @@ import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -70,6 +71,22 @@ public class StationDeviceBindingService {
             flowDriver = new FlowDriver(core.getConfigFlowService());
         }
         return flowDriver;
+    }
+
+    // ==================== 阶段-1：启动装载就绪信号 ====================
+
+    /**
+     * 启动门控信号（/asm-monitor/device/ready，pull 派生与 ADM admInitialized 同构）：
+     * airstation 集成注册 → 其 isStationDevicesCreated()（createAllStationDevices 尾部置位，
+     * 零 entry 也置位——零设备环境照样放行）；未注册（禁用/尚未加载）→ 恒 true（真未配置
+     * 如实显示，不卡骨架）。每次现读 volatile，零缓存。
+     */
+    public Map<String, Object> bootReady() {
+        AirstationIntegration station = airstationIntegration();
+        boolean initialized = station == null || station.isStationDevicesCreated();
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("initialized", initialized);
+        return data;
     }
 
     // ==================== 阶段0：列类型槽及绑定状态 ====================
@@ -121,7 +138,7 @@ public class StationDeviceBindingService {
     public synchronized ProvisionResult provision(StationParamMeta param, String coordinate, String model,
                                                   String sn, String name, Operation operation, String oldDeviceId) {
         StationProvisionProfile profile = StationProvisionProfileRegistry.getInstance()
-                .get(param.deviceType, coordinate, model);
+                .get(param, coordinate, model);
         if (profile == null) {
             // 严格模式：未注册的 profile 明确报错（厂商列表唯一来源=注册表，矩阵外不发明）
             throw new IllegalArgumentException("未注册的 profile: " + param.getType() + " / " + coordinate
@@ -443,8 +460,7 @@ public class StationDeviceBindingService {
                 continue;
             }
             result.add(new CompatibleDevice(phy.getId(), phy.getEntry().getCoordinate(),
-                    phy.getEntry().getTitle(), phy.getEntry().getUniqueId(),
-                    referencingParams(phy.getId())));
+                    phy.getEntry().getTitle(), phy.getEntry().getUniqueId()));
         }
         return result;
     }
@@ -477,23 +493,6 @@ public class StationDeviceBindingService {
                 fireRebind(param, logicDevice, phy, affectedAttrIds);
             }
         }
-    }
-
-    /** 某物理设备被哪些类型槽引用。 */
-    private List<String> referencingParams(String physicalDeviceId) {
-        AirstationIntegration station = airstationIntegration();
-        List<String> params = new ArrayList<>();
-        if (station == null) {
-            return params;
-        }
-        for (StationParamMeta p : StationParamMeta.values()) {
-            DeviceBase logicDevice = station.getDeviceByUniqueId(p.getUniqueId());
-            if (logicDevice != null
-                    && physicalDeviceId.equals(firstBoundDeviceId(logicDevice))) {
-                params.add(p.getType());
-            }
-        }
-        return params;
     }
 
     // ==================== 审计钩子辅助 ====================
@@ -648,20 +647,20 @@ public class StationDeviceBindingService {
     }
 
     /** 复用兼容设备（全稳定对象 API 来源，不按键义捞 entry.data）。 */
+    /** 兼容设备事实（deviceId/coordinate/title/uniqueId）——不含引用标注：被哪些槽引用由 params 数据
+     *  （boundDeviceId）推导，前端单一推导点 useStationDeviceState.referencingLabels（中文标签同点转换），
+     *  后端曾下发 referencingParams 与前端详情页推导构成分叉复制，已收口删除。 */
     public static final class CompatibleDevice {
         public final String deviceId;
         public final String coordinate;
         public final String title;
         public final String uniqueId;
-        public final List<String> referencingParams;
 
-        public CompatibleDevice(String deviceId, String coordinate, String title, String uniqueId,
-                                List<String> referencingParams) {
+        public CompatibleDevice(String deviceId, String coordinate, String title, String uniqueId) {
             this.deviceId = deviceId;
             this.coordinate = coordinate;
             this.title = title;
             this.uniqueId = uniqueId;
-            this.referencingParams = referencingParams;
         }
     }
 }

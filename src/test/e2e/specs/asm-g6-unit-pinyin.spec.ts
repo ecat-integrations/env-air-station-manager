@@ -23,19 +23,19 @@ test('G6-1 监控页单位切换：自定义重拉 unit=custom，切回标准 @g
 
   const switcher = page.locator('.asm-unit-switcher');
   await expect(switcher).toBeVisible();
-  await expect(switcher.locator('.asm-unit-btn.active')).toHaveText('默认'); // g9 起显示文字 标准→默认（localStorage 存值 standard 不动）
+  await expect(switcher.locator('.el-radio-button.is-active .el-radio-button__inner')).toHaveText('默认'); // g9 起显示文字 标准→默认（localStorage 存值 standard 不动）
 
   // 切自定义：等待 unit=custom 的 snapshot 请求命中（网络断言，确定性）
   const customReq = page.waitForRequest((r) => r.url().includes('/asm-monitor/snapshot') && r.url().includes('unit=custom'), { timeout: 15000 });
-  await switcher.locator('.asm-unit-btn', { hasText: '自定义' }).click();
+  await switcher.locator('.el-radio-button', { hasText: '自定义' }).click();
   await customReq;
-  await expect(switcher.locator('.asm-unit-btn.active')).toHaveText('自定义');
+  await expect(switcher.locator('.el-radio-button.is-active .el-radio-button__inner')).toHaveText('自定义');
 
   // 切回标准：url 不带 unit 参数（standard 缺省形态）
   const stdReq = page.waitForRequest((r) => r.url().includes('/asm-monitor/snapshot') && !r.url().includes('unit='), { timeout: 15000 });
-  await switcher.locator('.asm-unit-btn', { hasText: '默认' }).click(); // 显示文字已改「默认」
+  await switcher.locator('.el-radio-button', { hasText: '默认' }).click(); // 显示文字已改「默认」
   await stdReq;
-  await expect(switcher.locator('.asm-unit-btn.active')).toHaveText('默认'); // g9 起显示文字 标准→默认（localStorage 存值 standard 不动）
+  await expect(switcher.locator('.el-radio-button.is-active .el-radio-button__inner')).toHaveText('默认'); // g9 起显示文字 标准→默认（localStorage 存值 standard 不动）
 });
 
 test('G6-2 校准仪抽屉分组序 + SSE patch 后不乱序 @g6', async ({ page }) => {
@@ -97,9 +97,9 @@ test('G6-3 snapshot 双模式响应行集有序（standard/custom 各验一次�
 
   // custom：先挂监听再点切换（await 会先于 click 阻塞，必须持有 promise 后触发）
   const customResPromise = page.waitForResponse((r) => r.url().includes('/asm-monitor/snapshot') && r.url().includes('unit=custom'), { timeout: 20000 });
-  await page.locator('.asm-unit-switcher .asm-unit-btn', { hasText: '自定义' }).click();
+  await page.locator('.asm-unit-switcher .el-radio-button', { hasText: '自定义' }).click();
   assertOrdered(await (await customResPromise).json(), 'custom');
   // 还原默认 standard（localStorage 不残留 custom 影响后续用例）
-  await page.locator('.asm-unit-switcher .asm-unit-btn', { hasText: '默认' }).click(); // g9 起显示文字 标准→默认
+  await page.locator('.asm-unit-switcher .el-radio-button', { hasText: '默认' }).click(); // g9 起显示文字 标准→默认
   await page.waitForTimeout(300);
 });

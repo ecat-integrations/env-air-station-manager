@@ -1,8 +1,10 @@
 package com.ecat.integration.EnvAirStationManagerIntegration.controller;
 
+import com.ecat.integration.EnvAirStationManagerIntegration.controller.dto.AsmConfigStatRowDto;
 import com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmConfigStat;
 import com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmConfigUnit;
 import com.ecat.integration.EnvAirStationManagerIntegration.service.AsmConfigService;
+import com.ecat.integration.EnvAirStationManagerIntegration.service.AsmDeviceLabelService;
 import com.ruoyi.common.core.controller.BaseController;
 import com.ruoyi.common.core.domain.AjaxResult;
 import com.ruoyi.common.utils.SecurityUtils;
@@ -14,6 +16,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -23,6 +26,10 @@ import java.util.List;
  * <p><b>语义</b>：写 config_stat 不回溯历史（下个物化 tick 按新配置走，不触发重算）——PUT 响应
  * msg 注明；写 config_unit 即时生效（service 已失效单位缓存）。</p>
  *
+ * <p><b>config-stat 行追加契约字段</b>（前端 ruoyi 化，字段名固定）：{@code device_label}（槽中文）/
+ * {@code attr_label}（attr 中文 displayName）——口径与 alarm-record 行同源
+ * （{@link AsmDeviceLabelService}），旧字段平铺路径不变。</p>
+ *
  * @author coffee
  */
 @RestController
@@ -31,12 +38,19 @@ import java.util.List;
 public class AsmConfigController extends BaseController {
 
     private final AsmConfigService configService;
+    private final AsmDeviceLabelService labelService;
 
-    /** 聚合配置行（GET /asm-monitor/config-stat）。 */
+    /** 聚合配置行（GET /asm-monitor/config-stat；行=config 字段平铺 + device_label/attr_label）。 */
     @PreAuthorize("@ss.hasPermi('asm-monitor:config:read')")
     @GetMapping("/config-stat")
     public AjaxResult getStat() {
-        return AjaxResult.success(configService.listStatConfig());
+        List<AsmConfigStatRowDto> rows = new ArrayList<>();
+        for (AsmConfigStat stat : configService.listStatConfig()) {
+            rows.add(AsmConfigStatRowDto.of(stat,
+                    labelService.slotLabel(stat.getLogicDeviceUniqueId()),
+                    labelService.attrLabel(stat.getLogicDeviceUniqueId(), stat.getAttrId())));
+        }
+        return AjaxResult.success(rows);
     }
 
     /** 改单 series 聚合配置（PUT /asm-monitor/config-stat；operator=认证 principal）。 */

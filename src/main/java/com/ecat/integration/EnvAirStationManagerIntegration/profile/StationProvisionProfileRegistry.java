@@ -4,6 +4,7 @@ import lombok.Value;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.EnumMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -32,30 +33,39 @@ public class StationProvisionProfileRegistry {
         return new StationProvisionProfileRegistry();
     }
 
-    /** deviceType → (coordinate-model) → profile */
-    private final Map<String, Map<String, StationProvisionProfile>> profiles = new LinkedHashMap<>();
+    /**
+     * 类型槽 StationParamMeta → (coordinate-model) → profile。
+     *
+     * <p>键必须细到槽实例（非 deviceType）：多实例类型（切割器 pm10/pm25、空调 ac1/ac2 等）
+     * 共享同一 deviceType——若按 deviceType 索引，同厂商型号的多槽注册互相覆盖，get() 恒返回
+     * 后注册槽的 profile，FlowContext.stationParam 随之错槽（在 pm10 槽配置绑到 pm25，
+     * bugs/bug-record-20260902-*）。厂商型号矩阵对同 deviceType 的各实例是全量同构注册，
+     * 故按槽索引不影响厂商列表结果。
+     */
+    private final Map<StationParamMeta, Map<String, StationProvisionProfile>> profiles =
+            new EnumMap<>(StationParamMeta.class);
 
-    /** 注册一个 profile（复合键 = deviceType + coordinate-model）。 */
+    /** 注册一个 profile（复合键 = 类型槽 + coordinate-model）。 */
     public void register(StationProvisionProfile profile) {
-        String type = profile.getStationParam().deviceType;
+        StationParamMeta slot = profile.getStationParam();
         String key = profile.getCoordinate() + "-" + profile.getModel();
-        profiles.computeIfAbsent(type, k -> new LinkedHashMap<>()).put(key, profile);
+        profiles.computeIfAbsent(slot, k -> new LinkedHashMap<>()).put(key, profile);
     }
 
-    /** 精确查 profile（provision 用；未注册返 null，service 层严格报错）。 */
-    public StationProvisionProfile get(String deviceType, String coordinate, String model) {
-        Map<String, StationProvisionProfile> byType = profiles.get(deviceType);
-        return byType == null ? null : byType.get(coordinate + "-" + model);
+    /** 精确查 profile（provision 用；未注册返 null，service 层严格报错）。键含槽实例。 */
+    public StationProvisionProfile get(StationParamMeta param, String coordinate, String model) {
+        Map<String, StationProvisionProfile> bySlot = profiles.get(param);
+        return bySlot == null ? null : bySlot.get(coordinate + "-" + model);
     }
 
     /** 列该类型槽可选的厂家型号（厂商列表唯一来源；未注册返空列表）。 */
     public List<VendorOption> getByType(StationParamMeta param) {
-        Map<String, StationProvisionProfile> byType = profiles.get(param.deviceType);
-        if (byType == null || byType.isEmpty()) {
+        Map<String, StationProvisionProfile> bySlot = profiles.get(param);
+        if (bySlot == null || bySlot.isEmpty()) {
             return Collections.emptyList();
         }
         List<VendorOption> list = new ArrayList<>();
-        for (StationProvisionProfile p : byType.values()) {
+        for (StationProvisionProfile p : bySlot.values()) {
             list.add(new VendorOption(p.getCoordinate(), p.getModel(), p.getModel()));
         }
         return list;

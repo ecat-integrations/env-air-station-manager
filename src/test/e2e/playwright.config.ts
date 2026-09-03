@@ -25,6 +25,8 @@ export default defineConfig({
     trace: 'retain-on-failure',
     baseURL: process.env.BASE_URL || 'http://localhost:8081',
     actionTimeout: 15 * 1000,
+    // 套件级登录态（globalSetup 生成）：用例零登录交互，慢渲染登录页只在 setup 面对一次
+    storageState: 'test-results/.asm-auth.json',
     navigationTimeout: 30 * 1000,
   },
 
