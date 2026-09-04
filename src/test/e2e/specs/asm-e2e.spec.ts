@@ -159,53 +159,69 @@ test.describe('ASM 黑盒验收 G 段', () => {
   test('G2-control 下发排风扇 speed=low 回查终态 成功 并还原 off @g2', async ({ page, request }) => {
     // 2026-09-02 控制记录页重设计：执行控件移除（职责归设备控制页），下发走控制 API（与
     // AsmDeviceControl executor 同端点同 body）；记录页纯查询（「查询」承担重查，刷新按钮已删）。
-    const token = await apiLogin(request, ADMIN_USER, ADMIN_PASS);
-    const auth = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
-    const exec = (value: string) => request.post(`${API}/asm-monitor/control`, {
-      headers: auth, data: { uid: FAN_UID, attrId: FAN_ATTR, value } });
-    expect((await (await exec('low')).json()).code, 'API 下发 low 应受理').toBe(200);
-
+    //
+    // 页序契约（bug-record-20260901-084100）：先挂载页面再下发——复刻真实场景「记录页开着，控制
+    // 从别处进来，用户点查询」。若先下发再挂载，时间窗 end 在挂载时刻初始化已晚于记录 created_at，
+    // 冻结 end 缺陷被掩盖（09-02 重写曾因此假绿）。断言锁定「本次下发行」：execute 响应 data 含
+    // 审计记录 id，以 id 对照查询响应 data.rows 精确匹配，杜绝旧行假绿（历史断言扫「任意
+    // 远程/low/成功 行」，08-26 旧行滑出 24h 窗前一直假绿）。UI 表已删记录ID 列，故 id 匹配走
+    // 网络响应侧，再以 createdAt 展示串回绑表格行断言渲染。
     const cp = new AsmBasePage(page, 'control_list');
     await cp.goto();
-    // 轮询终态（PENDING→异步写回，秒级）。新列序（0 起，记录ID 列已删）：
-    // 0 时刻 /1 来源 /2 调用方 /3 设备 /4 参数 /5 动作 /6 执行前 /7 请求值 /8 执行后 /9 结果 /10 耗时ms
-    // 来源/结果已中文化（远程/成功）。扫全行按（请求=low 且 成功 且 远程）定位本次下发行。
-    const queryBtn = page.getByRole('button', { name: '查询', exact: true });
-    let lowRowIdx = -1;
-    await expect
-      .poll(async () => {
-        await queryBtn.click();
-        const rows = page.locator('.el-table__row', { hasText: FAN_ATTR });
-        const n = await rows.count();
-        for (let i = 0; i < n; i++) {
-          const tds = rows.nth(i).locator('td');
-          const origin = ((await tds.nth(1).innerText()) || '').trim();
-          const req = ((await tds.nth(7).innerText()) || '').trim();
-          const res = ((await tds.nth(9).innerText()) || '').trim();
-          if (origin === '远程' && req === 'low' && res === '成功') { lowRowIdx = i; return 'ok'; }
-        }
-        return `not-found(${n} rows)`;
-      }, { timeout: 60_000, message: '60s 内应有 远程/low/成功 行' })
-      .toBe('ok');
-    // 终态断言：成功 且 after 非空（E1 语义：终态成功时 after=执行后值）
-    const cells = page.locator('.el-table__row', { hasText: FAN_ATTR }).nth(lowRowIdx).locator('td');
-    expect(((await cells.nth(8).innerText()) || '').trim(), '成功 行 after 应非空').not.toBe('');
 
-    // 还原 off（API 下发）；低风/还原两行同秒并列 → 扫全行找「请求=off 且 成功」
-    expect((await (await exec('off')).json()).code, 'API 下发 off 应受理').toBe(200);
+    const token = await apiLogin(request, ADMIN_USER, ADMIN_PASS);
+    const auth = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
+    /** API 下发并返回审计记录 id（insert 仅回填 id；createdAt 是 DB 生成，execute 响应为 null，
+     *  时刻等字段以 list 按 id 回查的行数据为准——mapper 注释「useGeneratedKeys 回填 id」）。 */
+    const exec = async (value: string): Promise<number> => {
+      const body = await (await request.post(`${API}/asm-monitor/control`, {
+        headers: auth, data: { uid: FAN_UID, attrId: FAN_ATTR, value } })).json();
+      expect(body.code, `API 下发 ${value} 应受理`).toBe(200);
+      expect(body.data && body.data.id, `execute 响应须含审计记录 id: ${JSON.stringify(body)}`).toBeTruthy();
+      return body.data.id;
+    };
+    const lowId = await exec('low');
+
+    // 点「查询」并从本次 list 响应按 id 取行（表格渲染的行集 = 该响应 data.rows；无则 null）
+    const queryBtn = page.getByRole('button', { name: '查询', exact: true });
+    const rowById = async (recordId: number): Promise<any | null> => {
+      const respP = page.waitForResponse(
+        (r) => r.url().includes('/asm-monitor/control-record/list') && r.request().method() === 'GET',
+        { timeout: 15_000 });
+      await queryBtn.click();
+      const body = await (await respP).json();
+      return (((body || {}).data || {}).rows || []).find((r: any) => r.id === recordId) || null;
+    };
+    let lowRow: any = null;
     await expect
       .poll(async () => {
-        await queryBtn.click();
-        const rows = page.locator('.el-table__row', { hasText: FAN_ATTR });
-        const n = await rows.count();
-        for (let i = 0; i < n; i++) {
-          const tds = rows.nth(i).locator('td');
-          const req = ((await tds.nth(7).innerText()) || '').trim();
-          const res = ((await tds.nth(9).innerText()) || '').trim();
-          if (req === 'off' && res === '成功') return 'off-success';
-        }
-        return `not-found(${n} rows)`;
-      }, { timeout: 60_000, message: '还原 off 行应出现且终态 成功' })
+        lowRow = await rowById(lowId);
+        if (lowRow && lowRow.result === 'SUCCESS') return 'ok';
+        return `not-found(id=${lowId}${lowRow ? `,result=${lowRow.result}` : ''})`;
+      }, { timeout: 60_000, message: `60s 内本次下发行(id=${lowId})应出现在查询响应且终态 SUCCESS` })
+      .toBe('ok');
+    // 终态断言（E1 语义：终态成功时 after=执行后值）
+    expect(lowRow.afterValue, '成功 行 after 应非空').toBeTruthy();
+
+    // UI 渲染回绑：时刻列展示串 = 该行 createdAt（list 回查携带，ISO UTC）的本地壁钟秒级格式
+    // （datetime.js 同口径）。新列序（0 起，记录ID 列已删）：0 时刻 /1 来源 /2 调用方 /3 设备 /4 参数
+    // /5 动作 /6 执行前 /7 请求值 /8 执行后 /9 结果 /10 耗时ms（来源/结果已中文化）。
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const c = new Date(lowRow.createdAt);
+    const createdAtLocal = `${c.getFullYear()}-${pad(c.getMonth() + 1)}-${pad(c.getDate())} ` +
+      `${pad(c.getHours())}:${pad(c.getMinutes())}:${pad(c.getSeconds())}`;
+    const uiRow = page.locator('.el-table__row', { hasText: FAN_ATTR }).filter({ hasText: createdAtLocal })
+      .filter({ hasText: 'low' });
+    await expect(uiRow, '本次下发行应在表格渲染').toHaveCount(1);
+    expect((((await uiRow.locator('td').nth(8).innerText()) || '').trim()), 'UI 行执行后应非空').not.toBe('');
+
+    // 还原 off（API 下发）；同样按本次 off 行 id 锁定（低风/还原可能同秒，旧行扫描不可靠）
+    const offId = await exec('off');
+    await expect
+      .poll(async () => {
+        const row = await rowById(offId);
+        return row && row.result === 'SUCCESS' ? 'off-success' : `not-found(id=${offId}${row ? `,result=${row.result}` : ''})`;
+      }, { timeout: 60_000, message: `还原 off 行(id=${offId})应出现且终态 成功` })
       .toBe('off-success');
   });
 

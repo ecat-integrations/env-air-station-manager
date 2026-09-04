@@ -147,7 +147,13 @@ export default {
       deviceOptions: DEVICE_OPTIONS,
       filter: {
         start: formatLocalInputSeconds(new Date(now.getTime() - 24 * 3600 * 1000)),
-        end: formatLocalInputSeconds(now),
+        // 默认终点=挂载当天所属的明天 00:00（Date 构造器自理月/年进位）。不能冻结在挂载时刻：end 只在
+        // data() 初始化一次，「查询」复用它，挂载后新建的控制记录 created_at 会永落窗外、刷新永不可见
+        // （bug-record-20260901-084100）。必须到明天 00:00 而非当天 23:59:59：后端对 end 是亚秒严格比较，
+        // 秒截断不够覆盖当天每一秒。用户显式手选历史窗天然不受影响——此值仅初始一次，无任何自动逻辑改写。
+        // 已知边界（接受）：keep-alive 缓存页跨天使用时 end 停在前一天的 00:00，需刷新页面或手改时间窗，
+        // 不为此加自动前进逻辑（保持本页纯查询、零后台行为的从简设计）。
+        end: formatLocalInputSeconds(new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1)),
         uid: '',
         origin: '',
         result: '',
