@@ -27,11 +27,12 @@
     <!-- SSE 断连横幅；class asm-banner 仅作 e2e 钩子保留（视觉已由 el-alert 接管，连接健康时整块不渲染） -->
     <el-alert v-if="sseFailed" class="asm-banner" type="warning" :closable="false" title="连接断开，重连中…" />
 
-    <!-- 状态筛选 chips（sticky 于瓦片墙上方）：计数 computed 派生，SSE patch 改设备 online/alarm 后计数自然响应 -->
+    <!-- 状态筛选 chips（sticky 于瓦片墙上方）：计数 computed 派生，SSE patch 改设备 online/alarm 后计数自然响应；
+         加载中计数显 '—' 并禁点——未知 ≠ 0，杜绝「全部(0)」被误读成没数据 -->
     <div class="asm-chips">
       <button v-for="c in chips" :key="c.key" type="button" class="asm-chip"
-              :class="[c.key, { active: filterStatus === c.key }]" @click="filterStatus = c.key">
-        {{ c.label }}({{ c.count }})
+              :class="[c.key, { active: filterStatus === c.key }]" :disabled="loading" @click="filterStatus = c.key">
+        {{ c.label }}({{ loading ? '—' : c.count }})
       </button>
     </div>
 
