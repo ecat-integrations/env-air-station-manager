@@ -95,7 +95,11 @@ public class AsmHistoryQueryService {
                 .build();
     }
 
-    /** 桶行 → 结果行（unit=custom 时经 HISTORY 读出口换算，源=STORAGE 行 unit）。 */
+    /**
+     * 桶行 → 结果行（unit=custom 时经 HISTORY 读出口换算，源=STORAGE 行 unit）。
+     * display_unit 在换算完成的出口处取 {@code display.getUnit()}（=value 实际单位，custom 换算后
+     * 可能≠storageUnit；standard 未换算路径=storageUnit 同源）转 UnitInfo.getDisplayName 显示串。
+     */
     private AsmHistoryResult.Row toRow(AsmHistoryBucket bucket, boolean applyPref) {
         String storageUnit = unitContract.resolveUnit(
                 AsmUnitPurpose.STORAGE, bucket.getLogicDeviceUniqueId(), bucket.getAttrId());
@@ -110,6 +114,7 @@ public class AsmHistoryQueryService {
                 .attrId(bucket.getAttrId())
                 .value(display.getValue())
                 .unit(display.getUnit())
+                .displayUnit(AsmUnitContract.unitDisplayName(display.getUnit()))
                 .validCount(bucket.getValidCount())
                 .totalCount(bucket.getTotalCount())
                 .build();

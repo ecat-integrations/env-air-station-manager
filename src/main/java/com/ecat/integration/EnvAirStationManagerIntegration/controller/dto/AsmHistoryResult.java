@@ -1,5 +1,6 @@
 package com.ecat.integration.EnvAirStationManagerIntegration.controller.dto;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.Builder;
 import lombok.Value;
 
@@ -55,6 +56,10 @@ public class AsmHistoryResult {
 
         /** value 实际单位（full key；null=无量纲）。 */
         String unit;
+
+        /** 单位人类显示串（unit full key → UnitInfo.getDisplayName；换算出口实际单位同源转换；null=无量纲）。 */
+        @JsonProperty("display_unit")
+        String displayUnit;
 
         /** 有效样本数。 */
         Long validCount;

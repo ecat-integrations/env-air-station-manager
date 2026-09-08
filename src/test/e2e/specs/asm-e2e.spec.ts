@@ -69,18 +69,21 @@ test.describe('ASM 黑盒验收 G 段', () => {
     const times = page.locator('.asm-filter .el-range-input');
     await times.nth(0).fill(toLocalInput(new Date(now.getTime() - 30 * 60 * 1000)).replace('T', ' '));
     await times.nth(1).fill(toLocalInput(new Date(now.getTime() + 60 * 1000)).replace('T', ' '));
-    // 勾选参数池首个候选（stat-params 实际返回，mask 过滤后首个必可物化 MINUTE）
-    const firstCheck = page.locator('.asm-params input[type="checkbox"]').first();
-    await expect(firstCheck).toBeAttached();
-    await firstCheck.check();
-    await page.getByRole('button', { name: '查询', exact: true }).click();
+    // 参数选择（2026-09-08 v2：dialog 化）：readonly 触发框开 dialog → 勾参数 → 确定触发查询。
+    await page.locator('.asm-filter input[placeholder="选择参数..."]').click();
+    const firstParam = page.locator('.asm-params .asm-param-cb').first();
+    await expect(firstParam).toBeVisible({ timeout: 10_000 });
+    await firstParam.click();
+    await page.getByRole('button', { name: '确 定' }).click();
 
-    // 明细表出行 + echarts canvas 出图
+    // 明细表出行（默认视图=列表）
     await expect(page.locator('.el-table__body-wrapper tbody .el-table__row').first()).toBeVisible({ timeout: 20_000 });
     const rowCount = await page.locator('.el-table__body-wrapper tbody .el-table__row').count();
     expect(rowCount, '历史明细行应 >0').toBeGreaterThan(0);
+    // 曲线：切到曲线视图后 echarts canvas 出图（默认列表，需显式切换）
+    await page.locator('.asm-result-head .el-radio-button', { hasText: '曲线' }).click();
     await expect(page.locator('.asm-chart canvas')).toBeVisible();
-    // 分页器出现（series 有数据才渲染）
+    // 分页器出现（有数据后渲染；wrapper class .asm-pager 保留）
     await expect(page.locator('.asm-pager')).toBeVisible();
     expect(errors, `不应有 console error/pageerror: ${errors.join(' | ')}`).toEqual([]);
   });
