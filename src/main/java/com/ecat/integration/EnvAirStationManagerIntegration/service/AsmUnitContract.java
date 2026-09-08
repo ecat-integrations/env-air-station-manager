@@ -4,13 +4,21 @@ import com.ecat.core.State.UnitInfo;
 import com.ecat.core.State.Unit.UnitInfoFactory;
 import com.ecat.core.Utils.Log;
 import com.ecat.core.Utils.LogFactory;
+import com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmConfigUnit;
 import com.ecat.integration.EnvAirStationManagerIntegration.mapper.AsmConfigUnitMapper;
 import com.ecat.integration.EnvAirStationManagerIntegration.support.AsmUnitPurpose;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
 import java.util.EnumMap;
+import java.util.HashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -22,10 +30,11 @@ import java.util.concurrent.ConcurrentHashMap;
  * <p><b>per-uid 缓存</b>（同 ADM AdmStatContract 口径）：DB 查询粒度是 logic device
  * （{@code selectByLogicDevice(uid)} 一次返该设备全 attr 全 purpose 行），缓存键 = uid（查询粒度）。</p>
  *
- * <p><b>负结果不终身缓存</b>（ADM 教训）：uid 无任何配置行（设备刚建、seed 未跑）时<b>不写缓存</b>——
- * 否则后续 seed insertIfAbsent 落的行被旧负缓存屏蔽到重启。只有非空行集才入缓存；行集为空每次直查 DB
- * （量级：站房设备数 × 每分钟级解析，可忽略）。单 series 缺行（uid 有其他行但该 attr+purpose 无）是
- * 稳定语义（读出口显原生），随 uid 行集一起缓存合法。</p>
+ * <p><b>负结果不终身缓存</b>（ADM 教训，惰性路径口径）：uid 无任何配置行（设备刚建、seed 未跑）时
+ * <b>不写缓存</b>——否则后续 seed insertIfAbsent 落的行被旧负缓存屏蔽到重启。只有非空行集才入缓存；
+ * 行集为空每次直查 DB。<b>例外</b>：批量预载 {@link #preload} 口径下负结果也入缓存（正确性前提=
+ * 全部写路径写后必调 {@link #invalidate}），详见该方法 javadoc。单 series 缺行（uid 有其他行但该
+ * attr+purpose 无）是稳定语义（读出口显原生），随 uid 行集一起缓存合法。</p>
  *
  * @author coffee
  */
@@ -162,6 +171,30 @@ public class AsmUnitContract {
         }
     }
 
+    /**
+     * 单位 full key → 人类显示串（历史页 display_unit 契约源）。
+     *
+     * <p>源=core {@code UnitInfo.getDisplayName()}（枚举经 InternationalizedUnit 走 core
+     * strings.json i18n，如 {@code TemperatureUnit.CELSIUS}→{@code °C}），与 {@link #unitSymbol}
+     * 的 getName() 短符号不同源——本方法是带 i18n 语义的人类显示口径。
+     * 解码失败（枚举重命名残留脏 key）→ 原样返 key（可见而非吞掉，读侧容错与 unitSymbol 同口径）。</p>
+     *
+     * @param fullKey 单位 full key（null/空 → null）
+     * @return 单位显示串；null=无量纲
+     */
+    public static String unitDisplayName(String fullKey) {
+        if (fullKey == null || fullKey.trim().isEmpty()) {
+            return null;
+        }
+        try {
+            UnitInfo unit = UnitInfoFactory.getEnum(fullKey);
+            String displayName = unit != null ? unit.getDisplayName() : null;
+            return displayName != null ? displayName : fullKey;
+        } catch (IllegalArgumentException e) {
+            return fullKey;
+        }
+    }
+
     /** 宽松解码（读侧容错）：null/空串/非法 key → null（调用方直通显原生）+ warn。 */
     private UnitInfo decodeLenient(String key, String role) {
         if (key == null || key.trim().isEmpty()) {
@@ -179,7 +212,7 @@ public class AsmUnitContract {
     private EnumMap<AsmUnitPurpose, UnitRow> purposesOf(String uid, String attrId) {
         Map<String, EnumMap<AsmUnitPurpose, UnitRow>> byAttr = uidCache.get(uid);
         if (byAttr == null) {
-            byAttr = loadUid(uid);
+            byAttr = splitByAttr(configUnitMapper.selectByLogicDevice(uid));
             if (byAttr.isEmpty()) {
                 // 负结果不缓存：uid 无任何配置行（seed 未跑/设备刚建），直查——否则 seed 后落行被屏蔽到重启
                 return new EnumMap<>(AsmUnitPurpose.class);
@@ -190,11 +223,44 @@ public class AsmUnitContract {
         return purposes != null ? purposes : new EnumMap<>(AsmUnitPurpose.class);
     }
 
-    /** selectByLogicDevice → (attrId → (purpose → UnitRow))；空行集返空 Map（调用侧不缓存）。 */
-    private Map<String, EnumMap<AsmUnitPurpose, UnitRow>> loadUid(String uid) {
+    /**
+     * 批量预载（snapshot 请求开头用）：一次 IN 查询拉全部未缓存 uid 的行集并灌入 per-uid 缓存，
+     * 替代逐 uid 串行往返（远程库单查询 ~15ms 往返，逐 uid 循环在 37 设备量级下是秒级串行税）。
+     *
+     * <p><b>与惰性路径的负结果差异（有意为之）</b>：本方法把<b>无任何行的 uid（负结果）也写入缓存</b>
+     * （空行集标记），否则负 uid（如 camera/阀组等天然无单位偏好的非数值设备）的每个数值 attr
+     * 仍会逐次直查 DB。正确性前提：{@code asm_config_unit} 的全部写路径（配置端点、seed）直写后都调
+     * {@link #invalidate}（uid 级）——seed 后落行最迟下一次 invalidate 可见，无「屏蔽到重启」窗口。
+     * 惰性路径（未经预载的 uid）保持负结果不缓存的 ADM 口径不变。</p>
+     *
+     * @param uids 待预载 uid 集合；null/空集/已全缓存时零 DB 查询
+     */
+    public void preload(Collection<String> uids) {
+        if (uids == null || uids.isEmpty()) {
+            return;
+        }
+        Set<String> uncached = new LinkedHashSet<>();
+        for (String uid : uids) {
+            if (uid != null && !uidCache.containsKey(uid)) {
+                uncached.add(uid);
+            }
+        }
+        if (uncached.isEmpty()) {
+            return;
+        }
+        Map<String, List<AsmConfigUnit>> rowsByUid = new HashMap<>();
+        for (AsmConfigUnit row : configUnitMapper.selectByLogicDevices(uncached)) {
+            rowsByUid.computeIfAbsent(row.getLogicDeviceUniqueId(), k -> new ArrayList<>()).add(row);
+        }
+        for (String uid : uncached) {
+            uidCache.put(uid, splitByAttr(rowsByUid.getOrDefault(uid, Collections.emptyList())));
+        }
+    }
+
+    /** 行集 → (attrId → (purpose → UnitRow))；空行集返空 Map（缓存值，preload 下空集=负结果标记）。 */
+    private static Map<String, EnumMap<AsmUnitPurpose, UnitRow>> splitByAttr(List<AsmConfigUnit> rows) {
         Map<String, EnumMap<AsmUnitPurpose, UnitRow>> byAttr = new ConcurrentHashMap<>();
-        for (com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmConfigUnit row
-                : configUnitMapper.selectByLogicDevice(uid)) {
+        for (AsmConfigUnit row : rows) {
             byAttr.computeIfAbsent(row.getAttrId(), k -> new EnumMap<>(AsmUnitPurpose.class))
                     .put(AsmUnitPurpose.of(row.getPurpose()),
                             new UnitRow(row.getUnit(), row.getDisplayPrecision()));

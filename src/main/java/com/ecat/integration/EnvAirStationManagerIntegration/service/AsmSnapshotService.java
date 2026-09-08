@@ -138,25 +138,54 @@ public class AsmSnapshotService {
     /**
      * 全部现存站房设备的当前态快照（registry 无站房设备时返空列表）。
      *
+     * <p><b>批量化（性能）</b>：DB 访问全部收敛为「一次单位契约批量预载 + 至多一次 raw 批量预取」，
+     * 替代逐设备串行往返——站房 37 设备量级下，远程库逐 uid 往返（实测 30~140ms/次）曾把单次
+     * snapshot 推到 1.4~7.5s。缺值设备占比 100% 时旧优化（anyMissing 短路）从不生效：每台站房设备
+     * 都有至少一个「已定义但从未有值」的 attr（命令类/未绑定槽位），raw 预取退化为 37 连查。</p>
+     *
      * @param unit 显示单位模式（standard=STANDARD 行标准口径 / custom=MONITOR 偏好；解析见 {@link #purposeForUnit}）
      */
     public List<AsmSnapshotDeviceDto> buildAll(String unit) {
         AsmUnitPurpose purpose = purposeForUnit(unit);
-        List<AsmSnapshotDeviceDto> out = new ArrayList<>();
+        List<LogicDevice> stations = new ArrayList<>();
         for (LogicDevice device : LogicDeviceManager.getInstance().getRegisteredDevices()) {
             String uid = device.getUniqueId();
-            if (uid == null || !uid.startsWith(STATION_UID_PREFIX)) {
-                continue;
+            if (uid != null && uid.startsWith(STATION_UID_PREFIX)) {
+                stations.add(device);
             }
-            AsmOnlineJudge.Judgement online = AsmOnlineJudge.judge(device.getAttrs(), Instant.now());
-            List<AsmAlarmActiveDto> activeAlarms = buildActiveAlarms(device, uid);
+        }
+        // 单位契约批量预载：一次 IN 查询全部 uid（负结果也入缓存，杀逐 attr 直查税）
+        List<String> uids = new ArrayList<>(stations.size());
+        for (LogicDevice device : stations) {
+            uids.add(device.getUniqueId());
+        }
+        unitContract.preload(uids);
+        // 第一段：live 行收集（纯内存），同时标记缺值设备
+        List<Draft> drafts = new ArrayList<>(stations.size());
+        for (LogicDevice device : stations) {
+            drafts.add(collectLive(device, purpose));
+        }
+        // 第二段：缺值设备 raw 最新样本一次 IN 批量预取（全 live 时零 raw SQL，语义同旧逐台短路）
+        List<String> missingUids = new ArrayList<>();
+        for (Draft d : drafts) {
+            if (d.anyMissing) {
+                missingUids.add(d.uid);
+            }
+        }
+        Map<String, List<AsmDataSample>> rawByUid = missingUids.isEmpty()
+                ? Collections.<String, List<AsmDataSample>>emptyMap()
+                : rawLatestBatch(missingUids);
+        // 第三段：raw 回放合并 + DEF 占位补齐 + 排序 + 设备 DTO 组装
+        List<AsmSnapshotDeviceDto> out = new ArrayList<>(drafts.size());
+        for (Draft d : drafts) {
+            AsmOnlineJudge.Judgement online = AsmOnlineJudge.judge(d.device.getAttrs(), Instant.now());
             out.add(AsmSnapshotDeviceDto.builder()
-                    .logicDeviceUniqueId(uid)
-                    .displayName(device.getName())
+                    .logicDeviceUniqueId(d.uid)
+                    .displayName(d.device.getName())
                     .online(online.isOnline())
                     .offlineMs(online.getOfflineMs())
-                    .attrs(buildAttrs(device, uid, purpose))
-                    .activeAlarms(activeAlarms)
+                    .attrs(finishRows(d, rawByUid.getOrDefault(d.uid, Collections.<AsmDataSample>emptyList()), purpose))
+                    .activeAlarms(buildActiveAlarms(d.device, d.uid))
                     .build());
         }
         return out;
@@ -181,47 +210,70 @@ public class AsmSnapshotService {
         AsmUnitPurpose purpose = purposeForUnit(unit);
         for (LogicDevice device : LogicDeviceManager.getInstance().getRegisteredDevices()) {
             if (uid.equals(device.getUniqueId()) && uid.startsWith(STATION_UID_PREFIX)) {
-                return buildAttrs(device, uid, purpose);
+                unitContract.preload(Collections.singletonList(uid));
+                Draft d = collectLive(device, purpose);
+                List<AsmDataSample> raw = d.anyMissing ? rawLatest(uid) : Collections.<AsmDataSample>emptyList();
+                return finishRows(d, raw, purpose);
             }
         }
         return Collections.emptyList();
     }
 
     /**
-     * 单设备全属性：live state 优先，null/无值的 attr 用 raw 最新样本回放；最后按 attr def
-     * 补占位行（已定义但从未有值的属性，如未绑定的 ai_running——瓦片 catalog 与抽屉同集，
-     * 缺值行前端显 '-'，不隐行）。
+     * 单设备行构建中间态：live 行已收集（纯内存），缺值标记待 raw 预取后由
+     * {@link #finishRows} 合并——buildAll 批量预取与 buildForUid 单查共用同一三段式。
      */
-    private List<AsmSnapshotAttrDto> buildAttrs(LogicDevice device, String uid, AsmUnitPurpose purpose) {
-        Map<String, AttributeBase<?>> attrs = device.getAttrs();
-        Map<String, LogicAttributeDefine> defs = defIndex(device);
-        // 首轮收集 live 缺席的 attrId（第二轮才查 raw——全 live 时零 raw SQL）
-        boolean anyMissing = false;
-        Map<String, AsmSnapshotAttrDto> out = new HashMap<>();
-        for (Map.Entry<String, AttributeBase<?>> e : attrs.entrySet()) {
+    private static final class Draft {
+        final LogicDevice device;
+        final String uid;
+        final Map<String, LogicAttributeDefine> defs;
+        final Map<String, AsmSnapshotAttrDto> rows = new HashMap<>();
+        boolean anyMissing;
+
+        Draft(LogicDevice device, String uid, Map<String, LogicAttributeDefine> defs) {
+            this.device = device;
+            this.uid = uid;
+            this.defs = defs;
+        }
+    }
+
+    /**
+     * 第一段：遍历 live attrs 收集有值行（live state 优先，撕裂读契约同前）；无值 attr 只置
+     * missing 标记不落行（raw 回放/DEF 占位由 finishRows 决定）。
+     */
+    private Draft collectLive(LogicDevice device, AsmUnitPurpose purpose) {
+        String uid = device.getUniqueId();
+        Draft d = new Draft(device, uid, defIndex(device));
+        for (Map.Entry<String, AttributeBase<?>> e : device.getAttrs().entrySet()) {
             String attrId = e.getKey();
             AttrState<?> state = e.getValue().getState();
             if (state != null && state.getValue() != null) {
-                out.put(attrId, liveRow(uid, attrId, state, defs.get(attrId), purpose));
+                d.rows.put(attrId, liveRow(uid, attrId, state, d.defs.get(attrId), purpose));
             } else {
-                anyMissing = true;
+                d.anyMissing = true;
             }
         }
-        if (anyMissing) {
-            for (AsmDataSample sample : rawLatest(uid)) {
-                if (out.containsKey(sample.getAttrId())) {
-                    continue;  // 已有 live 值（本路径理论不进，防御数据竞争窗口）
-                }
-                out.put(sample.getAttrId(), rawRow(uid, sample, defs.get(sample.getAttrId()), purpose));
+        return d;
+    }
+
+    /**
+     * 第三段：raw 最新样本回放合并（live 已有的 attr 让位）→ 按 attr def 补占位行（已定义但
+     * live/raw 均无值，如未绑定的 ai_running——瓦片 catalog 与抽屉同集，缺值行前端显 '-'，不隐行）
+     * → 抽屉序排序。
+     */
+    private List<AsmSnapshotAttrDto> finishRows(Draft d, List<AsmDataSample> rawSamples, AsmUnitPurpose purpose) {
+        for (AsmDataSample sample : rawSamples) {
+            if (d.rows.containsKey(sample.getAttrId())) {
+                continue;  // 已有 live 值（防御批量预取与 live 收集窗口间的数据竞争）
+            }
+            d.rows.put(sample.getAttrId(), rawRow(d.uid, sample, d.defs.get(sample.getAttrId()), purpose));
+        }
+        for (LogicAttributeDefine def : d.defs.values()) {
+            if (!d.rows.containsKey(def.getAttrId())) {
+                d.rows.put(def.getAttrId(), defRow(def));
             }
         }
-        for (LogicAttributeDefine def : defs.values()) {
-            if (!out.containsKey(def.getAttrId())) {
-                out.put(def.getAttrId(), defRow(def));
-            }
-        }
-        List<AsmSnapshotAttrDto> rows = new ArrayList<>(out.values());
-        return sortAttrRows(rows, defs);
+        return sortAttrRows(new ArrayList<>(d.rows.values()), d.defs);
     }
 
     /** live 行：数值经 purpose 读出口换算 + HALF_EVEN 展示修约 + 单位符号化，非数值走 displayValue 串。 */
@@ -376,6 +428,18 @@ public class AsmSnapshotService {
         List<AsmDataSample> rows = historyMapper.selectLatestSamples(
                 Collections.singletonList(uid));
         return rows != null ? rows : Collections.<AsmDataSample>emptyList();
+    }
+
+    /** 批量 raw 最新样本：一次 IN 查询（全部缺值 uid）结果按 uid 分组回各设备；null 行集按空处理。 */
+    private Map<String, List<AsmDataSample>> rawLatestBatch(List<String> uids) {
+        List<AsmDataSample> rows = historyMapper.selectLatestSamples(uids);
+        Map<String, List<AsmDataSample>> byUid = new HashMap<>();
+        if (rows != null) {
+            for (AsmDataSample sample : rows) {
+                byUid.computeIfAbsent(sample.getLogicDeviceUniqueId(), k -> new ArrayList<>()).add(sample);
+            }
+        }
+        return byUid;
     }
 
     private static String unitKey(UnitInfo unit) {

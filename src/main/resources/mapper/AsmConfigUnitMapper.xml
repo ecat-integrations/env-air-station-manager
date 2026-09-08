@@ -25,6 +25,14 @@
         order by attr_id, purpose
     </select>
 
+    <!-- 批量预载：一次 IN 拉多 uid 全行（snapshot 请求开头预载用；空集调用方短路）。 -->
+    <select id="selectByLogicDevices" resultMap="AsmConfigUnitResult">
+        select <include refid="cols"/> from asm_config_unit
+        where logic_device_unique_id in
+        <foreach collection="uids" item="u" open="(" separator="," close=")">#{u}</foreach>
+        order by logic_device_unique_id, attr_id, purpose
+    </select>
+
     <select id="selectByPurpose" resultMap="AsmConfigUnitResult">
         select <include refid="cols"/> from asm_config_unit
         where purpose = #{purpose}

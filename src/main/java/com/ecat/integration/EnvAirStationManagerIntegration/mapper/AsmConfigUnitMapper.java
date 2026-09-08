@@ -3,6 +3,7 @@ package com.ecat.integration.EnvAirStationManagerIntegration.mapper;
 import com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmConfigUnit;
 import org.apache.ibatis.annotations.Param;
 
+import java.util.Collection;
 import java.util.List;
 
 /**
@@ -17,6 +18,12 @@ public interface AsmConfigUnitMapper {
 
     /** 该 logic device 全部 attr 全 purpose 行（per-uid 一次拉，读出口缓存粒度）。 */
     List<AsmConfigUnit> selectByLogicDevice(@Param("logicDeviceUniqueId") String logicDeviceUniqueId);
+
+    /**
+     * 多 logic device 批量拉行（snapshot 批量预载用）：一次 IN 查询替代逐 uid 往返
+     * （远程库单查询 ~15ms，逐 uid 循环是 N×15ms 串行税）。uids 空集由调用方短路，SQL 不处理空 IN。
+     */
+    List<AsmConfigUnit> selectByLogicDevices(@Param("uids") Collection<String> uids);
 
     /** 按用途滤行（如全 STORAGE 行）；无行返空列表。 */
     List<AsmConfigUnit> selectByPurpose(@Param("purpose") String purpose);
