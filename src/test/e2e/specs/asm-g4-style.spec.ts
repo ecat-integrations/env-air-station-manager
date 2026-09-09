@@ -105,12 +105,13 @@ test.describe('ASM G4 样式结构验证', () => {
       expect(box!.width, `canvas width=${box!.width} 应>0`).toBeGreaterThan(0);
       expect(box!.height, `canvas height=${box!.height} 应>0`).toBeGreaterThan(0);
     }
-    // 图表宿主容器（查询前空态）也应非零尺寸，证明布局占位正常
-    const chartHost = page.locator('.asm-chart, .asm-echarts, [class*="chart"]').first();
-    if (await chartHost.count()) {
-      const hb = await chartHost.boundingBox();
-      expect(hb && hb.height > 0, '图表宿主容器高度应>0').toBeTruthy();
-    }
+    // 图表占位（v2 后列表/曲线 v-show 切换）：切到曲线态断言图表容器可见且非零尺寸——
+    // 证明布局占位正常（列表态容器 display:none 是设计行为，不在此断言）
+    await page.locator('.asm-result-head .el-radio-button', { hasText: '曲线' }).click();
+    const wrap = page.locator('.asm-chart-wrap');
+    await expect(wrap).toBeVisible();
+    const hb = await wrap.boundingBox();
+    expect(hb && hb.height > 0, '图表容器（曲线态）高度应>0').toBeTruthy();
   });
 
   test('G4-5 规则页编辑弹窗 el-dialog 表单控件可见 @g4', async ({ page }) => {

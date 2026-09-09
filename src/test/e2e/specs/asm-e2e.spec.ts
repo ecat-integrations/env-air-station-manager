@@ -82,7 +82,8 @@ test.describe('ASM 黑盒验收 G 段', () => {
     expect(rowCount, '历史明细行应 >0').toBeGreaterThan(0);
     // 曲线：切到曲线视图后 echarts canvas 出图（默认列表，需显式切换）
     await page.locator('.asm-result-head .el-radio-button', { hasText: '曲线' }).click();
-    await expect(page.locator('.asm-chart canvas')).toBeVisible();
+    // 分图=每参数独立实例（.asm-split-cell 内 canvas），合并=单实例（.asm-chart 内）——两形态任一出图即可
+    await expect(page.locator('.asm-chart-wrap canvas').first()).toBeVisible();
     // 分页器出现（有数据后渲染；wrapper class .asm-pager 保留）
     await expect(page.locator('.asm-pager')).toBeVisible();
     expect(errors, `不应有 console error/pageerror: ${errors.join(' | ')}`).toEqual([]);

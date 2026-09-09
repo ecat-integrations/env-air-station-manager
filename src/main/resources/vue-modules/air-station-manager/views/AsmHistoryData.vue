@@ -134,7 +134,17 @@
       </div>
 
       <div v-show="viewMode === 'chart'" v-loading="loading" class="asm-chart-wrap">
-        <div ref="chartEl" class="asm-chart"></div>
+        <!--
+          分图（ADM 形态）：每参数独立 echarts 实例（单 grid 单 series 简单 option）+ CSS grid 排列；
+          跨子图 tooltip/axisPointer 联动由官方 echarts.connect 组队提供。（实例一律 markRaw 后入
+          data——经 reactive Proxy 驱动 echarts 会破坏 tooltip 挂载，见 bug-record-20260908-233000）
+        -->
+        <div v-if="chartLayout === 'split'" class="asm-split-grid">
+          <div v-for="s in series" :key="s.key" :ref="(el) => setSplitRef(s.key, el)" class="asm-split-cell"></div>
+        </div>
+        <!-- 合并：单实例多 series 单 grid（两形态在此无分歧）。v-if 全新挂载：持久 v-show 容器在
+             display:none 期 init 会落 100x100 默认尺寸且无自适应（图缩左上角），全新元素+nextTick 免疫 -->
+        <div v-if="chartLayout === 'merge'" ref="chartEl" class="asm-chart"></div>
         <div v-if="!series.length && !loading" class="asm-chart-empty">
           <el-empty description="无数据（选择参数后查询）" />
         </div>
@@ -250,6 +260,7 @@
 
 <script>
 import * as echarts from 'echarts'
+import { markRaw } from 'vue'
 // keep-alive 契约：Options API 组件 name 必须等于路由 name（history_data），宿主 keep-alive 按组件名匹配缓存。
 
 import { queryHistory, listStatParams, getSnapshot, getConfigUnit, putConfigUnit } from '@/api/asm'
@@ -358,7 +369,11 @@ export default {
       errorMsg: '',
       viewMode: 'list',
       chartLayout: 'split',
-      chart: null,
+      // echarts 实例必须 markRaw 入 data：Vue3 深度 reactive 会把实例包成 Proxy，经 Proxy 调
+      // setOption 破坏 echarts 内部身份比较 → Tooltip 视图永不挂载（bug-record-20260908-233000 根因）。
+      mergeChart: null,   // 合并图实例（每渲染重建，markRaw）
+      splitCharts: {},    // 分图：series key → 独立实例（每渲染重建，markRaw）
+      splitEls: {},       // 分图：series key → 容器元素（函数 ref 收集）
       // 参数选择弹窗：dialogChecked=草稿（打开时从 checked 拷贝，确定才回填并重查，取消丢弃）
       paramDialogVisible: false,
       dialogChecked: [],
@@ -469,7 +484,7 @@ export default {
   watch: {
     // 切到曲线：容器 v-show 生效后（nextTick）再 init/渲染，避免隐藏容器 0 尺寸初始化
     viewMode(v) {
-      if (v === 'chart') this.$nextTick(() => { this.ensureChart(); this.renderChart() })
+      if (v === 'chart') this.$nextTick(() => this.renderChart())
     },
     chartLayout() {
       this.renderChart()
@@ -484,11 +499,11 @@ export default {
   },
   // keep-alive 复活：容器尺寸可能已变（离开期间窗口缩放/侧栏折叠），补一次 resize
   activated() {
-    if (this.chart) this.$nextTick(() => this.chart.resize())
+    this.$nextTick(() => this.resize())
   },
   beforeUnmount() {
     window.removeEventListener('resize', this.resize)
-    if (this.chart) this.chart.dispose()
+    this.disposeAllCharts()
   },
   methods: {
     formatLocalDateTime,
@@ -630,7 +645,7 @@ export default {
       try {
         const res = await queryHistory({ ...this.queryBase(), pageNum: this.filter.pageNum, pageSize: this.filter.pageSize })
         this.rows = (res && res.data && res.data.rows) || []
-        if (this.viewMode === 'chart') { this.ensureChart(); this.renderChart() }
+        if (this.viewMode === 'chart') this.renderChart()
       } catch (e) {
         this.rows = []
         this.errorMsg = (e && e.message) || '查询失败'
@@ -659,37 +674,80 @@ export default {
     },
     // —— 曲线 ——
     resize() {
-      if (this.chart) this.chart.resize()
+      if (this.mergeChart) this.mergeChart.resize()
+      Object.values(this.splitCharts).forEach((c) => c.resize())
     },
-    ensureChart() {
-      if (!this.chart && this.$refs.chartEl) this.chart = echarts.init(this.$refs.chartEl)
+    /** 分图函数 ref 收集（v-for 渲染期逐个回调；卸载时 el=null 清键）。 */
+    setSplitRef(key, el) {
+      if (el) this.splitEls[key] = el
+      else delete this.splitEls[key]
+    },
+    disposeSplit() {
+      Object.values(this.splitCharts).forEach((c) => { try { c.dispose() } catch (e) { /* 已释放 */ } })
+      this.splitCharts = {}
+    },
+    disposeAllCharts() {
+      this.disposeSplit()
+      if (this.mergeChart) { try { this.mergeChart.dispose() } catch (e) { /* 已释放 */ } this.mergeChart = null }
     },
     renderChart() {
-      if (this.viewMode !== 'chart' || !this.chart) return
+      if (this.viewMode !== 'chart') return
       const times = this.pivotRows.map((r) => formatLocalDateTime(r.dataTime, true))
-      // 空序列仍走 clear 清残图；有数据用 notMerge(true) 全量替换（ADM 同模式）
-      if (!this.series.length) { this.chart.clear(); return }
-      this.chart.setOption(
-        this.chartLayout === 'merge' ? this.mergeChartOption(times) : this.splitChartOption(times), true)
-      this.pageRealmReplay()
+      if (!this.series.length) { this.disposeAllCharts(); return }
+      if (this.chartLayout === 'split') this.renderSplit(times)
+      else this.renderMerge(times)
     },
     /**
-     * 页面域重放（tooltip 挂载宿主缺陷的工程绕行）：本模块 dist 在宿主加载域执行，该域创建/驱动的
-     * echarts 实例 Tooltip 视图永不挂载（真鼠标/派发均无提示、零报错；同一 option 同一元素改由
-     * 页面域 setOption 即正常——多轮浏览器实验复现，证据与排除项见 bugs/bug-record-20260908-233000）。
-     * 经注入同源 <script>（在页面域执行）对本图实例做一次 normalized option notMerge 重放，
-     * 重放后 tooltip 恢复。幂等、无全局残留（script 用后即删，仅触达本组件图元素）。
+     * 分图（ADM 形态）：v-for 容器挂载后逐参数全新实例，一次 setOption(notMerge)；
+     * echarts.connect 组队提供官方跨子图联动（tooltip/axisPointer/dataZoom/图例同步）。
+     * v-if 切换布局后容器是全新元素，实例重建天然完成旧图清理。
+     * markRaw 后存 data（见 data() 注释）：实例读取恒为 raw，杜绝经 Proxy 调用。
      */
-    pageRealmReplay() {
-      const el = this.$refs.chartEl
-      if (!el) return
-      if (!el.id) el.id = 'asm-history-chart-el'
-      const s = document.createElement('script')
-      s.textContent = "(function(){var el=document.getElementById('" + el.id + "');"
-        + "if(!el)return;var i=window.echarts.getInstanceByDom(el);"
-        + "if(i&&!i.isDisposed()){i.setOption(i.getOption(),true);}})()"
-      document.documentElement.appendChild(s)
-      s.remove()
+    renderSplit(times) {
+      this.disposeSplit()
+      if (this.mergeChart) this.mergeChart.clear()
+      this.$nextTick(() => {
+        const charts = []
+        for (const s of this.series) {
+          const el = this.splitEls[s.key]
+          if (!el) continue
+          const inst = markRaw(echarts.init(el))
+          inst.setOption(this.splitCellOption(s, times), true)
+          this.splitCharts[s.key] = inst
+          charts.push(inst)
+        }
+        if (charts.length > 1) echarts.connect(charts)
+      })
+    },
+    /** 分图单格 option：单 grid 单 series 简单形态（教科书用法，宿主实证 Tooltip 正常）。 */
+    splitCellOption(s, times) {
+      return {
+        animation: false,  // 查询即重建的小图动画无收益，走同步渲染
+        title: { text: s.name + (s.unit ? ' (' + s.unit + ')' : ''), left: 6, top: 2, textStyle: { fontSize: 12, fontWeight: 500 } },
+        tooltip: { trigger: 'axis', confine: true, axisPointer: { type: 'line' } },
+        grid: { left: 48, right: 14, top: 30, bottom: 26 },
+        xAxis: { type: 'category', data: times, axisLabel: { hideOverlap: true } },
+        yAxis: { type: 'value', scale: true },
+        // 单点序列必须显示符号：showSymbol:false 下单点无线段可画=子图空白（1h 窗口小时粒度常态）
+        series: [{ name: s.name, type: 'line', showSymbol: s.points.length <= 1, symbolSize: 7, connectNulls: true, data: this.seriesData(s) }],
+      }
+    },
+    /**
+     * 合并：每渲染 dispose 重建（同 ADM 用后即弃）。v-if 全新元素经 nextTick init（持久 v-show
+     * 容器在 display:none 期 init 会落 100x100 默认尺寸且无自适应）。实例 markRaw 后再入 data
+     * ——经 reactive Proxy 调 setOption 正是本页 tooltip 失效的根因（bug-record-20260908-233000），
+     * markRaw 后与 ADM 同形（raw 实例上驱动），tooltip 原生正常，无需任何绕行。
+     */
+    renderMerge(times) {
+      this.disposeSplit()
+      if (this.mergeChart) { this.mergeChart.dispose(); this.mergeChart = null }
+      this.$nextTick(() => {
+        if (!this.$refs.chartEl || this.viewMode !== 'chart' || this.chartLayout !== 'merge') return
+        this.mergeChart = markRaw(echarts.init(this.$refs.chartEl))
+        this.mergeChart.setOption(this.mergeChartOption(times), true)
+        // resize 容错：渲染 flush 期调用偶发抛异常，尺寸在 init/setOption 已对齐，此处只是兜底
+        try { this.mergeChart.resize() } catch (e) { /* 尺寸已对齐，忽略 */ }
+      })
     },
     seriesData(s) {
       return this.pivotRows.map((r) => {
@@ -697,62 +755,24 @@ export default {
         return p && p.value != null ? p.value : null
       })
     },
-    // 分图：每参数独立 grid，两列流式；子图标题=设备中文·参数中文 (display_unit)
-    splitChartOption(times) {
-      const n = this.series.length
-      const rows = Math.ceil(n / 2)
-      const gap = 4
-      const topPad = 6
-      const bottomPad = 6
-      const colW = (100 - gap * 3) / 2
-      const rowH = (100 - topPad - bottomPad) / rows
-      const grids = []
-      const xAxes = []
-      const yAxes = []
-      const titles = []
-      const sers = []
-      this.series.forEach((s, i) => {
-        const c = i % 2
-        const r = Math.floor(i / 2)
-        const left = gap + c * (colW + gap)
-        const top = topPad + r * rowH
-        grids.push({ left: left + '%', width: colW + '%', top: top + '%', height: rowH - 3 + '%' })
-        // 仅底行显示时刻轴标签、仅尾行右侧留白收尾，中间行去标签省纵向空间
-        xAxes.push({ type: 'category', data: times, gridIndex: i, axisLabel: { show: r === rows - 1 } })
-        yAxes.push({ type: 'value', scale: true, gridIndex: i })
-        titles.push({
-          text: s.name + (s.unit ? ' (' + s.unit + ')' : ''),
-          left: left + '%',
-          top: Math.max(0, top - 3.2) + '%',
-          textStyle: { fontSize: 12 },
-        })
-        // 单点序列必须显示符号：showSymbol:false 下单点无线段可画=子图空白（1h 窗口小时粒度常态），多点保持净线
-        sers.push({ name: s.name, type: 'line', showSymbol: s.points.length <= 1, symbolSize: 7, connectNulls: true, xAxisIndex: i, yAxisIndex: i, data: this.seriesData(s) })
-      })
-      return {
-        // 自定义 formatter 实测会杀死 tooltip 视图挂载（本宿主 vite+echarts5.5.1 组合，带函数的
-        // tooltip 与无函数的互斥实验定位），默认渲染已按时刻逐 series 出值；单位见子图标题括号
-        tooltip: { trigger: 'axis', confine: true, axisPointer: { type: 'line' } },
-        grid: grids,
-        xAxis: xAxes,
-        yAxis: yAxes,
-        title: titles,
-        series: sers,
-      }
-    },
     // 合并：一图多 series，tooltip 逐 series 带 display_unit
     mergeChartOption(times) {
+      // 形态对齐 ADM buildMergeOption：legend 置顶显式 data、axisPointer cross、title 显式关闭。
+      // series 名并入单位（legend 与默认 tooltip 渲染均带单位），不挂自定义 formatter——默认渲染
+      // 已按时刻逐 series 出值，少一份函数少一分维护面。
+      const names = this.series.map((s) => s.name + (s.unit ? ' (' + s.unit + ')' : ''))
       return {
-        // formatter 去除原因同分图（函数与 tooltip 挂载互斥）；单位在 series 名尾或由默认渲染给出
-        tooltip: { trigger: 'axis', confine: true, axisPointer: { type: 'line' } },
-        legend: { type: 'scroll', bottom: 0 },
-        grid: { left: 60, right: 24, top: 30, bottom: 44 },
-        xAxis: { type: 'category', data: times },
+        title: { show: false },
+        animation: false,
+        tooltip: { trigger: 'axis', axisPointer: { type: 'cross' } },
+        legend: { show: true, type: 'scroll', orient: 'horizontal', top: 4, left: 8, right: 8, height: 28, itemWidth: 18, itemHeight: 10, itemGap: 12, selectedMode: true, data: names },
+        grid: { left: 52, right: 16, top: 44, bottom: 32 },
+        xAxis: { type: 'category', data: times, axisLabel: { fontSize: 10, hideOverlap: true } },
         yAxis: { type: 'value', scale: true },
         series: this.series.map((s) => ({
-          name: s.name,
+          name: s.name + (s.unit ? ' (' + s.unit + ')' : ''),
           type: 'line',
-          showSymbol: s.points.length <= 1,  // 单点序列显示符号（同分图：否则空白）
+          showSymbol: s.points.length <= 1,  // 单点序列显示符号（否则空白）
           symbolSize: 7,
           connectNulls: true,
           data: this.seriesData(s),
@@ -898,6 +918,10 @@ export default {
 .asm-table-wrap { flex: 1; min-width: 0; position: relative; }
 .asm-chart-wrap { flex: 1; min-width: 0; position: relative; }
 .asm-chart { width: 100%; height: 100%; }
+/* 分图排列：CSS grid 两列（奇数个末格跨整行，不留右半空白）——布局交给 CSS，删手工百分比数学 */
+.asm-split-grid { display: grid; grid-template-columns: repeat(2, minmax(240px, 1fr)); gap: 6px 18px; align-content: start; height: 100%; overflow-y: auto; padding: 2px; }
+.asm-split-cell { height: 158px; min-width: 0; }
+.asm-split-cell:last-child:nth-child(odd) { grid-column: 1 / -1; }
 .asm-chart-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: #fff; }
 .asm-pager { display: flex; justify-content: flex-end; align-items: center; gap: 10px; margin-top: 8px; flex-shrink: 0; }
 .asm-pager-count { font-size: 12px; color: #606266; }
