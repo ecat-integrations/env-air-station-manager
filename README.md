@@ -95,7 +95,7 @@ AirStationSdk sdk = ((EnvAirStationManagerIntegration) core.getIntegrationRegist
 ## 测试与回归
 
 - **模块单测**：`mvnd clean test`（367 个，覆盖引擎（数值 avg + 非数值 ALARM/STATE）/规则/生命周期/在线判定/排序/SDK 全域）。
-- **浏览器回归（强制，API 冒烟不替代）**：`src/test/e2e/` Playwright 套件，`npm run test:asm-e2e`（g1 六页渲染 / g2 核心交互 / g3 无权限 403 / g4 样式 / g5 中文名同集修约 / g6 单位双模式拼音序 / g7 报警可视化 / g8 报警并集+分组序）。前置：core+8081 起且 vue 注入（globalSetup 自检）。陷阱表见 e2e/README.md。
+- **浏览器回归（强制，API 冒烟不替代）**：Playwright 套件已移至 workspace `.claude/skills/ruoyi-e2e-test/skills/env-air-station-manager/e2e/`（2026-09-09 迁出本仓，入口与陷阱表见该目录 README 与 asm-e2e-test.md）——`npm run test:asm-e2e`（ro 只读组并行 / real 写操作组串行；g1-g13 分组脚本）。前置：core+8081 起且 vue 注入（globalSetup 自检）。
 - **DB 侧回归**：workspace ruoyi-e2e-test skill 的 `asm-regression.py`（bucket-check / idempotency / compute-log / alarm-check[episode 心跳断言] / control-check / linkage-check）。
 
 ## 排障与边界
