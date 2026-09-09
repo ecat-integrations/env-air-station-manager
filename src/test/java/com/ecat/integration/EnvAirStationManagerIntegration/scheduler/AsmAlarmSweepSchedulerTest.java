@@ -58,7 +58,7 @@ class AsmAlarmSweepSchedulerTest {
     }
 
     private static AsmAlarmRecord activeRow(long id, Instant start, Instant lastBreach) {
-        return AsmAlarmRecord.builder().id(id).alarmType("1").ruleName("t")
+        return AsmAlarmRecord.builder().id(id).alarmType("room_temp_abnormal").ruleName("t")
                 .logicDeviceUniqueId(UID).attrId("temperature").severity("0")
                 .startTime(start).endTime(null).status("ACTIVE").lastBreachTime(lastBreach).build();
     }
@@ -79,7 +79,7 @@ class AsmAlarmSweepSchedulerTest {
 
     @Test
     void sweep_expiredActive_closedAndSlotRemoved() {
-        registry.put(new AsmAlarmRegistry.ActiveAlarm(UID, "temperature", "1", "t", T0, T0));
+        registry.put(new AsmAlarmRegistry.ActiveAlarm(UID, "temperature", "room_temp_abnormal", "t", T0, T0));
         when(mapper.selectAllActive()).thenReturn(Collections.singletonList(activeRow(7L, T0, T0)));
 
         int closed = scheduler.doSweep(T0.plusSeconds(6 * 60));      // last_breach + 6min > 5min 窗

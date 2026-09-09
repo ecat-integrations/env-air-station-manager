@@ -26,7 +26,8 @@ import java.util.List;
  * <ul>
  *   <li><b>batch 单 SQL</b>：N 参数一次往返（tuple IN-list），禁 N+1；结果按 dataTime 升序。</li>
  *   <li><b>value = STORAGE 存储单位桶均值</b>（机对机口径，不做展示偏好换算）；unit 恒为 value 实际单位
- *       （asm_config_unit STORAGE 行 full key；null=无量纲）。</li>
+ *       （asm_config_unit STORAGE 行 full key；null=无量纲）。非数值 series（ALARM/STATE）value=null、
+ *       取 SdkStatRow.valueText（ALARM: normal/alarm；STATE: 状态串；unit=空串显无单位）。</li>
  *   <li><b>querySnapshot</b>：live 实时态优先（经 MONITOR 读出口换算），raw 最新值回放兜（source 标记 LIVE/RAW）。</li>
  *   <li><b>无缓存</b>：直连 mapper（外部轮询分钟级，stat 查询毫秒级）。</li>
  * </ul>
@@ -43,6 +44,9 @@ public interface AirStationSdk {
 
     /**
      * batch 查询多参数的 stat 桶行。
+     *
+     * <p>数值 series 桶行 value=STORAGE 存储单位桶均值；非数值 series（ALARM/STATE）value=null、
+     * valueText=非数值统计值（ALARM: normal/alarm；STATE: 状态串）原样透传。</p>
      *
      * @param params      参数键列表，一次 SQL tuple IN 查询
      * @param granularity 统计粒度（MINUTE/FIVE_MIN/HOUR → asm_stat_minute/_5min/_hour）
@@ -78,16 +82,39 @@ public interface AirStationSdk {
     List<SdkSnapshotAttr> querySnapshot(String uid);
 
     /**
-     * P3：查询 ASM 报警记录（asm_alarm_record，时间窗按触发/恢复时刻 end_time 落窗，倒序）。
+     * 查询指定报警标识在时间段内的报警条目（含持续中尚未恢复的）。
      *
-     * @param logicDeviceUniqueId 设备过滤（null=全部站房设备；空白串非法）
-     * @param start               窗口起（含，UTC instant）
-     * @param end                 窗口止（不含，UTC instant）
-     * @param limit               行数上限（1..1000）
-     * @return 报警记录列表（end_time 降序）；无数据返空列表
-     * @throws IllegalArgumentException 设备串空白 / 时刻 null / start≥end / limit 越界
+     * <p><b>窗口语义 = episode 区间重叠，查询窗左开右闭 {@code (start, end]}</b>：报警 episode 与开区间
+     * 时刻集 {@code (start, end]} 有交集即命中。边界（跨窗连续查询——上窗 end=下窗 start——无缝无重）：</p>
+     * <ul>
+     *   <li>右闭 {@code start_time <= end}：end 时刻触发的报警<b>算本期</b>，不漏；</li>
+     *   <li>左开 {@code end_time > start}：恰在 start 时刻闭单的报警<b>归上一期</b>，不重。</li>
+     * </ul>
+     * <p>持续中尚未恢复的报警（end_time=null 的 ACTIVE 行）episode 开区间到 +∞，天然命中——覆盖
+     * 窗内闭单 / 窗前开始窗内闭 / 窗内开始窗后闭 / 窗前开始仍未恢复全部场景。</p>
+     *
+     * <p>行形状与前端报警表格列一致（状态/规则名/设备/参数/级别/触发时刻/恢复时刻/持续时长/报警详情）
+     * 外加 alarmType 查询键回显；label 双字段解析不到为 null（机对机口径不内联回退，见
+     * {@link SdkAlarmEntry}）。</p>
+     *
+     * @param alarmType 报警标识（语义化 string；合法值可经 {@link #listAlarmTypes()} 枚举）
+     * @param start     窗口起（开，UTC instant）
+     * @param end       窗口止（闭，UTC instant）
+     * @param limit     行数上限（1..1000）
+     * @return 报警条目列表（triggerTime 降序）；无数据返空列表
+     * @throws IllegalArgumentException alarmType 空白 / 时刻 null / start≥end / limit 越界
      */
-    List<SdkAlarmRecord> queryAlarmRecords(String logicDeviceUniqueId, Instant start, Instant end, int limit);
+    List<SdkAlarmEntry> queryAlarmEntries(String alarmType, Instant start, Instant end, int limit);
+
+    /**
+     * 动态列出 ASM 当前全部合法报警标识目录（asm_alarm_rule 全量投影）。
+     *
+     * <p>模式同 {@link #listStatParams()}：调用者据此得知 queryAlarmEntries 可查标识，不必翻 DB。
+     * 坏配置行隔离跳过（同规则索引语义，目录只列合法标识）；按 alarmType 升序稳定清单序。</p>
+     *
+     * @return 报警标识元数据列表（alarmType/ruleName/severity）；配置未 seed 时返空列表
+     */
+    List<SdkAlarmTypeMeta> listAlarmTypes();
 
     /**
      * P4：执行一次站房设备控制写（origin=LOCAL，经统一控制服务收口、全程落 asm_control_record 审计）。

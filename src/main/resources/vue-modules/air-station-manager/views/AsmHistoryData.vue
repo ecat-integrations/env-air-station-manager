@@ -4,14 +4,28 @@
     参数触发）+ mb8 操作行（导出/视图切换）+ 结果主体（列表/曲线）占满剩余视口（页面级不滚动，表格内部滚）。
     参数选择走 dialog：搜索区只读输入框回显「首项中文 等 N 项」单行，点开弹窗内勾选（设备分组+组级全选+
     搜索过滤），确定才回填勾选并重查。
-    列契约：表格/导出列头 = 勾选集全集（checkedKeys 顺序），无数据参数照常占列、单元格 '--'；
-    当前粒度不可物化的参数查询时跳过（提交集=可物化子集）但列头保留，悬浮「当前粒度不物化」。
-    查询流：GET /asm-monitor/history（扁平行集）→ 前端按 uid:attrId 分组透视为宽表；分页用「下一页探测」
-    （后端现无 total，当前页行数==pageSize 则认为有下一页）；导出=循环分页拉全量生成 CSV。
+    列契约：表格/导出列头 = 勾选集全集（checkedKeys 顺序），无数据参数照常占列；网格格缺桶时
+    数值参数显 '-'、非数值参数显 '--'；当前粒度不可物化的参数查询时跳过（提交集=可物化子集）但
+    列头保留，悬浮「当前粒度不物化」。
+    查询流（等间隔网格分页，前端主导）：GET /asm-monitor/history（降序桶行）→ 前端按 uid:attrId
+    分组透视进「窗口网格」——tick 全集=窗口内按粒度对齐的全部时刻（统计桶标即对齐边界），
+    total=tick 数（pager「共 N 条」=N 个时刻），每页固定 N 个 tick（200/500/1000）按时间段倒序切页：
+    第 1 页=窗口末段最新段、翻页向更早、页内时刻亦降序（页序/页内/表格/CSV 同一降序口径）。每页
+    请求以页 tick 区间为查询窗（pageNum=1、order=DESC、pageSize=页 tick 数×参数数且≥2000 护栏），
+    响应行按 dataTime 对位进网格，无数据的 tick 照常成行——不再出现扁平行集分页下「参数历史起点
+    异构 → 首页整页单列 / 后页页行数骤减」的形态（响应 total/count 字段保留但不再作为 pager 依据）。
     参数候选池来自 GET /asm-monitor/stat-params（与 Java SDK listStatParams 同源；
     按 applicableGranularityMask 置灰当前粒度不可物化的参数，勾选态保留但查询时跳过）。
     契约字段（后端并行追加，缺失回退）：stat-params 行 display_unit（缺→storageUnit）/
-    device_label（缺→uniqueId）；history 行 display_unit（缺→unit）。
+    device_label（缺→uniqueId）；history 行 display_unit（缺→unit）。响应 total（桶行计数）
+    仅为兼容保留，网格分页的 pager 依据=前端窗口 tick 数（见上）。
+    非数值 series（ALARM 报警/STATE 状态，白名单 attr）：history 行 value=null + value_text（alarm/normal/
+    状态串）+ validCount/totalCount（桶内非空样本数/总样本数，接口字段保留）。列表只显 value_text 原文、
+    不显计数（2026-09-09 拍板移除 W1 的 N/M 内联/计数悬浮——计数对运维无读数价值且挤占列宽）、
+    alarm 值红（红=报警专属）；曲线按行值域自判分类（stat-params 出参无类别字段）：ALARM（值域仅
+    normal/alarm）=红/绿/灰三色状态带子图（bar 逐点着色 + showBackground 灰底，粒度补空缺桶=灰即
+    「无数据≠正常」）、STATE（状态串）不画（分类域无自然序，表格读）、数值=折线。合并模式仅数值
+    （ALARM 带只在分图）；CSV 值列导 value_text，仅数值参数跟「有效/总数」计数列（非数值不跟）。
   -->
   <div class="asm-page asm-history">
     <!-- 搜索区：ruoyi 原生 el-form :inline 平铺；@submit.prevent 阻原生隐式提交（Enter 整页刷新） -->
@@ -94,6 +108,10 @@
             <el-radio-button value="merge">合并</el-radio-button>
           </el-radio-group>
           <span v-if="sameUnit" class="asm-merge-hint">单位相同可合并</span>
+          <!-- 不画数量提示按布局区分（消解「选了怎么没画」困惑）：分图 ALARM 已出三色带，只剩 STATE 不画；
+               合并模式 ALARM/STATE 都不参与合并（限制不变），维持全量口径文案 -->
+          <span v-if="chartLayout === 'split' && stateSeriesCount" class="asm-merge-hint">{{ stateSeriesCount }} 项状态参数不画曲线（列表可查）</span>
+          <span v-else-if="chartLayout === 'merge' && nonNumericSeriesCount" class="asm-merge-hint">{{ nonNumericSeriesCount }} 项报警/状态参数不画曲线（列表可查）</span>
         </template>
       </el-col>
     </el-row>
@@ -119,14 +137,17 @@
             </template>
             <template #default="{ row }">
               <template v-if="row.cells[s.key]">
-                <span>{{ cellText(row.cells[s.key]) }}</span>
+                <span :class="{ 'asm-alarm-text': isAlarmCell(row.cells[s.key]) }">{{ cellText(row.cells[s.key]) }}</span>
+                <!-- 非数值行（ALARM/STATE）不显计数（2026-09-09 拍板移除 W1 的 N/M 内联与计数悬浮）：
+                     状态/报警串的读数就是值本身，N/M 对运维无读数价值且挤占列宽；计数呈现只保留数值行
+                     既有「·仅局部有效才显」形态（悬浮 validHint，零改动） -->
                 <el-tooltip
                   v-if="partialValid(row.cells[s.key])"
                   :content="validHint(row.cells[s.key])"
                   placement="top"
                 ><span class="asm-valid-dot">·</span></el-tooltip>
               </template>
-              <span v-else class="asm-muted">--</span>
+              <span v-else class="asm-muted">{{ emptyCellText(s) }}</span>
             </template>
           </el-table-column>
         </el-table>
@@ -140,39 +161,54 @@
           data——经 reactive Proxy 驱动 echarts 会破坏 tooltip 挂载，见 bug-record-20260908-233000）
         -->
         <div v-if="chartLayout === 'split'" class="asm-split-grid">
-          <div v-for="s in series" :key="s.key" :ref="(el) => setSplitRef(s.key, el)" class="asm-split-cell"></div>
+          <!-- 数值 series=折线格、ALARM series=三色带格（矮格），STATE 不出容器（不出空白格、不占 CSS grid 位）；
+               参与格共用同一份补空时间轴——connect 联动按 category 值对齐（见 buildAxis） -->
+          <div
+            v-for="s in splitSeries"
+            :key="s.key"
+            :ref="(el) => setSplitRef(s.key, el)"
+            class="asm-split-cell"
+            :class="{ 'asm-split-cell--band': isBandSeries(s) }"
+          ></div>
         </div>
-        <!-- 合并：单实例多 series 单 grid（两形态在此无分歧）。v-if 全新挂载：持久 v-show 容器在
+        <!-- 合并：单实例多 series 单 grid（仅数值 series，ALARM 带只在分图）。v-if 全新挂载：持久 v-show 容器在
              display:none 期 init 会落 100x100 默认尺寸且无自适应（图缩左上角），全新元素+nextTick 免疫 -->
         <div v-if="chartLayout === 'merge'" ref="chartEl" class="asm-chart"></div>
         <div v-if="!series.length && !loading" class="asm-chart-empty">
           <el-empty description="无数据（选择参数后查询）" />
         </div>
+        <!-- 当前布局无可画 series：区别于「无数据」的明确空态（文案按布局如实区分，见 emptyChartText） -->
+        <div v-else-if="!drawableSeries.length && !loading" class="asm-chart-empty">
+          <el-empty :description="emptyChartText" />
+        </div>
       </div>
     </div>
 
     <!--
-      分页（下一页探测）：后端 history 响应现无 total 字段——当前页行数==pageSize 判定有下一页，
-      probedTotal 据此构造（有下一页时 total=已取行数+1，让 pager 放出下一页按钮）；
-      后端补 total 后可改为直读。计数口径=扁平行数（数据点数），与表格时刻行数不同（多参数透视）。
+      分页（等间隔网格分页）：total=窗口内网格 tick 数（按粒度对齐、前端计算，与后端桶行数/数据点数
+      无关）——「共 N 条」即 N 个时刻；每页 tick 数 200/500/1000，页序=时间段倒序（第 1 页=窗口末段）。
+      后端响应 total/count 字段保留但不再作为 pager 依据（count 是桶行数口径，网格分页下页边界=网格
+      边界、页大小恒定，前端按窗口算才是唯一真相）。
     -->
-    <div class="asm-pager" v-if="rows.length || filter.pageNum > 1">
-      <!-- 计数口径=数据点数（扁平行，多参数同刻透视为一时刻行）——自写消歧文案，不用 el-pagination 内置 total（"共N条"与表格行数不符困惑） -->
-      <span class="asm-pager-count">共 {{ probedTotal }} 个数据点</span>
+    <div class="asm-pager" v-if="gridReady && series.length && gridTotal">
       <el-pagination
         size="small"
         background
-        layout="prev, pager, next"
+        layout="total, sizes, prev, pager, next, jumper"
+        :total="gridTotal"
+        :page-sizes="PAGE_SIZES"
         :page-size="filter.pageSize"
         :current-page="filter.pageNum"
         @current-change="turnPage"
+        @size-change="changePageSize"
       />
     </div>
 
     <!-- 参数选择弹窗：草稿勾选（dialogChecked），确定才回填 checked 并重查；取消丢弃 -->
     <el-dialog v-model="paramDialogVisible" title="选择参数" width="720px" append-to-body>
       <div v-loading="metaLoading" class="asm-params">
-        <!-- 设备下拉搜索（filterable 可输入过滤选项）+ 参数关键字两段筛选：设备靠选不靠敲，减少输入 -->
+        <!-- 设备下拉搜索（filterable 可输入过滤选项）+ 参数关键字两段筛选：设备靠选不靠敲，减少输入；
+             两控件同 size="small"（高度一致，否则并排一矮一高错位） -->
         <div class="asm-param-filter-row">
           <el-select v-model="paramDeviceUid" filterable clearable placeholder="按设备筛选（可输入搜索）" size="small" class="asm-param-device">
             <el-option v-for="d in devices" :key="d.uid" :value="d.uid" :label="d.label" />
@@ -181,6 +217,7 @@
             v-model="paramKeyword"
             clearable
             placeholder="按参数搜索"
+            size="small"
             class="asm-param-search"
           />
         </div>
@@ -265,7 +302,7 @@ import { markRaw } from 'vue'
 
 import { queryHistory, listStatParams, getSnapshot, getConfigUnit, putConfigUnit } from '@/api/asm'
 import { formatLocalDateTime, formatLocalInputSeconds } from '@/utils/datetime'
-import { fetchAllHistoryPages, downloadCsv, EXPORT_MAX_ROWS } from '@/utils/historyExport'
+import { downloadCsv, EXPORT_PAGE_TICKS, EXPORT_MAX_ROWS } from '@/utils/historyExport'
 
 // 粒度 → applicableGranularityMask 位（与后端 AsmGranularityMask 同定义：bit0=minute/bit1=5min/bit2=hour）
 const GRANULARITY_BIT = { MINUTE: 1, FIVE_MIN: 2, HOUR: 4 }
@@ -288,13 +325,23 @@ const UNITS = [
   { value: 'custom', label: '自定义' },
   { value: 'standard', label: '标准' },
 ]
+// 每页 tick 数三档（el-pagination sizes 选择器）：默认 200=既有口径，1000 档让分钟粒度 1 天（1440
+// 时刻）两页看完；导出循环按独立档位（EXPORT_PAGE_TICKS）切段，与页面浏览档位解耦
+const PAGE_SIZES = [200, 500, 1000]
+
+/**
+ * 单页请求 pageSize 护栏下限（桶行数口径）：一页要装下「页 tick 数 × 参数数」的桶行（网格一行 =
+ * 一时刻全参数），2000 起步保证小参数集时也不必靠后端分页；REST 侧另有 20000 上限护栏（超限被
+ * 钳位时表现为部分格无数据，不崩页），10 参数×1000/页=10000 在护栏内。
+ */
+const GRID_MIN_QUERY_PAGE_SIZE = 2000
 
 // 参数勾选记忆（uid:attrId 数组）：跨会话恢复用户粘性选择
 const CHECKED_STORAGE_KEY = 'asm-history-checked'
 
 /**
- * 扁平行集 → series 分组。列基准=勾选集全集（checkedKeys 顺序）：勾选但窗口无数据的参数照常占列
- * （表头完整、单元格 '--'），不再随返回数据行裁剪列；meta 缺失回退 key 原文（uid/attrId 拆首个 ':'）。
+ * 桶行集 → series 分组。列基准=勾选集全集（checkedKeys 顺序）：勾选但窗口无数据的参数照常占列
+ * （表头完整、网格格显占位符），不再随返回数据行裁剪列；meta 缺失回退 key 原文（uid/attrId 拆首个 ':'）。
  * unit 优先取行内 display_unit（随查询的 standard/custom 口径变化），行内无单位再回退
  * stat-params 元数据（display_unit→storageUnit）——无数据列只能取 meta 口径。
  */
@@ -331,16 +378,118 @@ function buildSeries(checkedKeys, rows, metaByKey) {
   return out
 }
 
-/** series → 时刻并集透视图（升序，旧→新）：行 cells={key→原始行（含 value/validCount/totalCount）}。 */
-function pivotOf(rows, seriesArr) {
-  const byTime = new Map()
+/**
+ * 等间隔网格分页的窗口网格（本页唯一分页模型的纯函数）：tick 全集=窗口 [start,end] 内按粒度对齐的
+ * 全部网格边界时刻（firstMs=进位对齐、lastMs=舍位对齐，两端含）。total=tick 数而非数据点数——
+ * 无数据的 tick 照常成行（等间隔网格：时刻连续、缺数据显占位），不再随参数历史起点异构而塌缩。
+ * 步长取自 GRANULARITY_STEP_MS（与后端 AsmStatGranularity.interval 同定义，桶标即对齐边界）。
+ * @param {string} startStr 窗口起（datetime-local 线上串，本地壁钟）
+ * @param {string} endStr 窗口止（同上）
+ * @param {number} stepMs 粒度步长 ms
+ * @param {number} pageSize 每页 tick 数
+ * @returns {{firstMs: number, lastMs: number, stepMs: number, pageSize: number, total: number, pages: number}|null} null=窗口内无对齐时刻（不足一个步长）
+ */
+function buildGridWindow(startStr, endStr, stepMs, pageSize) {
+  const startMs = new Date(startStr).getTime()
+  const endMs = new Date(endStr).getTime()
+  if (Number.isNaN(startMs) || Number.isNaN(endMs) || !(stepMs > 0) || !(pageSize > 0)) return null
+  const firstMs = Math.ceil(startMs / stepMs) * stepMs
+  const lastMs = Math.floor(endMs / stepMs) * stepMs
+  if (lastMs < firstMs) return null
+  const total = (lastMs - firstMs) / stepMs + 1
+  // pageSize 入窗（非独立传参）：页切分档位与窗口绑定成单一真相——切页/请求窗/行展开必须用同一个
+  // 窗口对象，混用两套档位（浏览档 vs 导出档）会切出越界段（start>end 请求，实测缺陷）
+  return { firstMs, lastMs, stepMs, pageSize, total, pages: Math.ceil(total / pageSize) }
+}
+
+/**
+ * 网格第 k 页（1 起，倒序切页）的 tick 序号区间 [fromIdx,toIdx]（全集升序 0 基含两端）：
+ * fromIdx=total-k*N 截到 0（末页余量）、toIdx=total-(k-1)*N-1；页越界钳回末页（窗口/页大小
+ * 变更后的陈旧页码）。页切分与请求窗、行展开共用本索引，保证「页=时间段」单一真相。
+ */
+function gridPageIndex(win, pageNum) {
+  const page = Math.min(Math.max(pageNum, 1), win.pages)
+  const n = win.pageSize
+  return {
+    fromIdx: Math.max(0, win.total - page * n),
+    toIdx: Math.min(win.total - (page - 1) * n - 1, win.total - 1),
+  }
+}
+
+/**
+ * 网格第 k 页 → 后端查询窗：页 tick 区间的 [start,end) 表达——上限多让一个步长，后端「前闭后开」
+ * 窗口才恰好含入段末 tick 的桶标（段边界=网格边界，页间不重不漏）。
+ * @returns {{start: string, end: string}} datetime-local 线上串（对齐时刻秒位恒 00，无精度损失）
+ */
+function gridSegment(win, pageNum) {
+  const { fromIdx, toIdx } = gridPageIndex(win, pageNum)
+  const loMs = win.firstMs + fromIdx * win.stepMs
+  const hiMs = win.firstMs + toIdx * win.stepMs
+  return {
+    start: formatLocalInputSeconds(new Date(loMs)),
+    end: formatLocalInputSeconds(new Date(hiMs + win.stepMs)),
+  }
+}
+
+/**
+ * 网格透视图（降序 ticks × series → 行集）：每个 tick 恒生成一行，cells 按 dataTime(ms) 对位填充
+ * （cells 缺键=该 series 此 tick 无桶，占位由调用方按 series 类别定）。表格/曲线/导出共用同一展开；
+ * 桶行→tick 按 ms 精确对位的依据=物化桶标即网格边界（对齐写入），越界/错位行在契约外不存在。
+ * @param {number[]} ticksDesc 网格 tick ms（降序）
+ * @param {Array} seriesArr buildSeries 出参（points=桶行）
+ */
+function gridPivotRows(ticksDesc, seriesArr) {
+  const cellByTick = new Map()
   for (const s of seriesArr) {
     for (const p of s.points) {
-      if (!byTime.has(p.dataTime)) byTime.set(p.dataTime, { dataTime: p.dataTime, cells: {} })
-      byTime.get(p.dataTime).cells[s.key] = p
+      const t = new Date(p.dataTime).getTime()
+      let m = cellByTick.get(t)
+      if (!m) {
+        m = new Map()
+        cellByTick.set(t, m)
+      }
+      m.set(s.key, p)
     }
   }
-  return [...byTime.values()].sort((a, b) => (a.dataTime < b.dataTime ? -1 : 1))
+  return ticksDesc.map((t) => {
+    const m = cellByTick.get(t)
+    const cells = {}
+    if (m) {
+      for (const [k, v] of m) cells[k] = v
+    }
+    return { dataTime: t, cells }
+  })
+}
+
+// ALARM 三色带配色：红=报警（#f56c6c，与表格 .asm-alarm-text / statusBadge danger 同源，报警专属不挪用）、
+// 绿=正常（#67c23a=success）、灰=无数据（#909399=info，showBackground 底色）
+const BAND_ALARM_COLOR = '#f56c6c'
+const BAND_NORMAL_COLOR = '#67c23a'
+const BAND_NONE_COLOR = '#909399'
+// 三色图例语义用子图注文字承载：echarts 原生 legend 项=series，单 series 带分不出三色（实测结论）
+const BAND_LEGEND_TEXT = '{alarm|■报警} {normal|■正常} {none|■无数据}'
+const BAND_LEGEND_RICH = {
+  alarm: { color: BAND_ALARM_COLOR, fontSize: 10 },
+  normal: { color: BAND_NORMAL_COLOR, fontSize: 10 },
+  none: { color: BAND_NONE_COLOR, fontSize: 10 },
+}
+// 粒度 → 桶步长 ms（与后端 AsmStatGranularity.interval 同定义：分钟/5分钟/小时）
+const GRANULARITY_STEP_MS = { MINUTE: 60 * 1000, FIVE_MIN: 5 * 60 * 1000, HOUR: 3600 * 1000 }
+
+/**
+ * series 类别（行值域自判，stat-params 出参无类别字段——设计决策后端零改动）：
+ * NUMERIC=数值折线；ALARM=值域仅 normal/alarm → 三色状态带；STATE=其余状态串 → 不画（表格读）。
+ * 判定看该 series 页内行的 value_text 全集：空集=数值（含窗口无行的参数，维持折线空图现状）；
+ * 出现二值域之外的串（on/off/cooling 等）即 STATE（该 series 不画，保守不猜测其余行的域）。
+ */
+function seriesKind(s) {
+  let hasText = false
+  for (const p of s.points) {
+    if (p.value_text == null) continue
+    hasText = true
+    if (p.value_text !== 'normal' && p.value_text !== 'alarm') return 'STATE'
+  }
+  return hasText ? 'ALARM' : 'NUMERIC'
 }
 
 export default {
@@ -348,7 +497,7 @@ export default {
   data() {
     const now = new Date()
     return {
-      GRANULARITY, MODES, MODE_HINTS, UNITS,
+      GRANULARITY, MODES, MODE_HINTS, UNITS, PAGE_SIZES,
       filter: {
         granularity: 'HOUR',
         mode: 'BACK',
@@ -366,6 +515,12 @@ export default {
       loading: false,
       exporting: false,
       rows: [],
+      // 当前筛选下已成功取数（网格行/分页器的渲染闸）：查询失败/清参时不渲染占位网格行，
+      // 免「错误横幅下出现整页 '-' 空行」的误导形态
+      gridReady: false,
+      // series 类别跨页记忆（key → ALARM/STATE）：类别只能从行值域自判（stat-params 无类别字段），
+      // 稀疏 series 在无行页会被判成数值 → 占位符同列跨页翻形；观测到非数值一次即记忆，翻页/换页稳定
+      seriesKindMemo: {},
       errorMsg: '',
       viewMode: 'list',
       chartLayout: 'split',
@@ -455,23 +610,53 @@ export default {
     series() {
       return buildSeries(this.checked, this.rows, this.metaByKey)
     },
-    // 升序透视图（曲线用）；列表倒序=最新时刻在前
-    pivotRows() {
-      return pivotOf(this.rows, this.series)
+    // 当前页网格（纯派生：窗口/粒度/页大小 → tick 全集）；null=窗口不足一个粒度步长
+    gridWindow() {
+      return buildGridWindow(
+        this.filter.start, this.filter.end,
+        GRANULARITY_STEP_MS[this.filter.granularity] || 0, this.filter.pageSize)
     },
+    // pager total=窗口内网格 tick 数（N 个时刻），非后端桶行数
+    gridTotal() {
+      return this.gridWindow ? this.gridWindow.total : 0
+    },
+    // 当前页网格行（降序，表格直用不反转）：tick 恒成行，cells 缺键=该 series 此刻无桶
     tableRows() {
-      return this.pivotRows.slice().reverse()
-    },
-    hasNext() {
-      return this.rows.length >= this.filter.pageSize
-    },
-    // 下一页探测的 total 构造：有下一页时 +1 让 pager 放出下一页按钮；无则封顶在已取行数
-    probedTotal() {
-      const base = (this.filter.pageNum - 1) * this.filter.pageSize + this.rows.length
-      return this.hasNext ? base + 1 : base
+      if (!this.gridReady || !this.gridWindow || !this.series.length) return []
+      const win = this.gridWindow
+      const { fromIdx, toIdx } = gridPageIndex(win, this.filter.pageNum)
+      const ticks = []
+      for (let i = toIdx; i >= fromIdx; i--) ticks.push(win.firstMs + i * win.stepMs)
+      return gridPivotRows(ticks, this.series)
     },
     sameUnit() {
       return this.series.length > 1 && this.series.every((s) => (s.unit || '') === (this.series[0].unit || ''))
+    },
+    // 曲线参与集=数值 series（seriesKind 行值域自判：value_text 空集=数值，stat-params 无类别字段拿到行才能判）
+    chartSeries() {
+      return this.series.filter((s) => seriesKind(s) === 'NUMERIC')
+    },
+    // STATE series（状态串）数 → 分图不画曲线提示文案用
+    stateSeriesCount() {
+      return this.series.filter((s) => seriesKind(s) === 'STATE').length
+    },
+    // 分图参与集：数值折线 + ALARM 三色带（保持勾选顺序混排）；STATE 不参与
+    splitSeries() {
+      return this.series.filter((s) => seriesKind(s) !== 'STATE')
+    },
+    // 当前布局可画 series（渲染清场与空态判定共用口径）：分图=数值+ALARM 带，合并=仅数值
+    drawableSeries() {
+      return this.chartLayout === 'split' ? this.splitSeries : this.chartSeries
+    },
+    // 无可画 series 的空态文案：分图全为 STATE / 合并全为非数值，两场景成因不同不共用一句
+    emptyChartText() {
+      return this.chartLayout === 'split'
+        ? '所选参数均为状态类，不绘制曲线（见列表）'
+        : '所选参数均为报警/状态类，不参与合并（见分图/列表）'
+    },
+    // 非数值 series 数（合并模式提示文案用）
+    nonNumericSeriesCount() {
+      return this.series.length - this.chartSeries.length
     },
     // 弹窗设备候选：仅含数值参数（attrGroup==2）的设备——单位只对数值行有意义（配置页同口径）
     unitDevices() {
@@ -549,13 +734,18 @@ export default {
       this.checked = [...this.dialogChecked]
       this.persistChecked()
       this.paramDialogVisible = false
+      this.seriesKindMemo = {} // 列契约变更，类别记忆随勾选集重置
       this.search()
     },
-    // 触发框清除按钮：清空全部勾选并清结果（不发起零参数查询——那只会得到必败错误提示）
+    // 触发框清除按钮：清空全部勾选并清结果（不发起零参数查询——那只会得到必败错误提示）；
+    // 勾选集是列契约与网格行的口径来源，一并归位页码与取数态，免残留上一次查询的网格
     clearAllChecked() {
       this.checked = []
       this.persistChecked()
       this.rows = []
+      this.gridReady = false
+      this.seriesKindMemo = {} // 勾选集清空，类别记忆一并归位
+      this.filter.pageNum = 1
       this.errorMsg = ''
     },
     persistChecked() {
@@ -591,6 +781,8 @@ export default {
       this.checked = []
       this.persistChecked()
       this.rows = []
+      this.gridReady = false
+      this.seriesKindMemo = {} // 重置归位默认筛选与勾选集，类别记忆一并归位
       this.errorMsg = ''
     },
     // —— 查询 ——
@@ -640,14 +832,32 @@ export default {
       const err = this.validate()
       if (err) { this.errorMsg = err; return }
       if (!this.submittableKeys.length) { this.errorMsg = '请至少勾选一个当前粒度可物化的参数'; return }
+      const win = this.gridWindow
+      if (!win) { this.errorMsg = '时间窗内无对齐时刻（窗口不足一个粒度步长）'; return }
+      // 窗口收窄/页大小变更后的陈旧页码先归位（pager 与请求共用同一页区间，避免两处各钳一次）
+      if (this.filter.pageNum > win.pages) this.filter.pageNum = win.pages
       this.errorMsg = ''
       this.loading = true
+      this.gridReady = false
       try {
-        const res = await queryHistory({ ...this.queryBase(), pageNum: this.filter.pageNum, pageSize: this.filter.pageSize })
-        this.rows = (res && res.data && res.data.rows) || []
+        // 网格分页：pageNum 恒 1（分页由前端网格切，后端一次拉齐本页时间段）、order=DESC（DB 侧
+        // 排好最新在前）、pageSize=页 tick 数×参数数且≥2000（REST 侧 20000 护栏内）
+        const seg = gridSegment(win, this.filter.pageNum)
+        const res = await queryHistory({
+          ...this.queryBase(),
+          start: seg.start,
+          end: seg.end,
+          pageNum: 1,
+          pageSize: Math.max(GRID_MIN_QUERY_PAGE_SIZE, this.filter.pageSize * this.submittableKeys.length),
+          order: 'DESC',
+        })
+        this.rows = ((res || {}).data || {}).rows || []
+        this.gridReady = true
+        this.rememberSeriesKinds()
         if (this.viewMode === 'chart') this.renderChart()
       } catch (e) {
         this.rows = []
+        this.gridReady = false
         this.errorMsg = (e && e.message) || '查询失败'
         if (this.viewMode === 'chart') this.renderChart()
       } finally {
@@ -662,9 +872,64 @@ export default {
       this.filter.pageNum = p
       this.load()
     },
+    // 每页条数变更：页码归 1 重查（行数口径变了，原页位无意义）。element-plus 经 props 驱动时
+    // 只发 size-change（钳位检查读的是未刷新的旧 props，不发 current-change），无双查。
+    changePageSize(size) {
+      this.filter.pageSize = size
+      this.filter.pageNum = 1
+      this.load()
+    },
     // —— 表格单元格 ——
+    // 值槽取值（表格/导出共用口径）：非数值行=value_text 原文、数值行=value、无行/两槽皆空=null
+    //（占位由调用方定：表格 '--'、导出空串）。value_text 判定先行——非数值行 value 恒 null。
+    cellValue(p) {
+      if (!p) return null
+      if (p.value_text != null) return p.value_text
+      return p.value
+    },
     cellText(p) {
-      return p.value == null ? '--' : p.value
+      const v = this.cellValue(p)
+      return v == null ? '--' : v
+    },
+    /**
+     * series 类别统一出口（占位形态与 CSV 计数列共用同一判定）：本行集有行按值域自判（stat-params
+     * 无类别字段）；无行读跨页记忆（rememberSeriesKinds）；两处都没有退数值口径——不做猜测性兜底。
+     */
+    seriesKindOf(s) {
+      return s.points.length ? seriesKind(s) : (this.seriesKindMemo[s.key] || 'NUMERIC')
+    },
+    /**
+     * 空 tick 格占位（等间隔网格行恒在、该 series 此刻无桶）：数值 '-'、非数值（报警/状态）'--'。
+     * 两形态区分「数值参数该时刻无样本」与「非数值参数该时刻无观测」——非数值沿既有 '--' 口径
+     * （无观测不得被误读为正常态，与曲线灰底「无数据≠正常」同语义），数值 '-' 表纯缺桶。
+     */
+    emptyCellText(s) {
+      return this.seriesKindOf(s) === 'NUMERIC' ? '-' : '--'
+    },
+    /** 记录本页观测到的非数值 series 类别（数值不记：缺省即数值口径）。 */
+    rememberSeriesKinds() {
+      for (const s of this.series) {
+        if (s.points.length) {
+          const kind = seriesKind(s)
+          if (kind !== 'NUMERIC') this.seriesKindMemo[s.key] = kind
+        }
+      }
+    },
+    // 报警态专属红（#f56c6c，与 statusBadge danger 同源）：仅值串 'alarm' 命中；
+    // normal/状态串（on/off/cooling 等）不占红——红保留给报警语义
+    isAlarmCell(p) {
+      return p.value_text === 'alarm'
+    },
+    // 非数值行（ALARM/STATE）：value=null + value_text 非空
+    isNonNumericCell(p) {
+      return p.value_text != null
+    },
+    hasCounts(p) {
+      return p.validCount != null && p.totalCount != null
+    },
+    // 计数短文本（仅 CSV 数值参数计数列用）：「非空样本数/总样本数」，悬浮全称见 validHint
+    countText(p) {
+      return `${p.validCount}/${p.totalCount}`
     },
     partialValid(p) {
       return p.validCount != null && p.totalCount != null && p.validCount < p.totalCount
@@ -692,44 +957,116 @@ export default {
     },
     renderChart() {
       if (this.viewMode !== 'chart') return
-      const times = this.pivotRows.map((r) => formatLocalDateTime(r.dataTime, true))
-      if (!this.series.length) { this.disposeAllCharts(); return }
-      if (this.chartLayout === 'split') this.renderSplit(times)
-      else this.renderMerge(times)
+      // 当前布局无可画 series：清场（空态提示由模板 .asm-chart-empty 承载）
+      if (!this.drawableSeries.length) { this.disposeAllCharts(); return }
+      // 分图/合并同一份页网格轴：缺数据槽位=null（ALARM 带露灰底承载「无数据≠正常」，数值折线
+      // connectNulls 跨接视觉不变）——补空语义不再分布局，统一网格天然覆盖
+      if (this.chartLayout === 'split') this.renderSplit(this.buildAxis())
+      else this.renderMerge(this.buildAxis())
+    },
+    /**
+     * 曲线时间轴=当前页网格升序（读图方向旧→新，与表格降序展示解耦；connect 联动按 category 值
+     * 对齐的硬前提=各子图同一份轴）。页边界=网格边界，原 W3「页内观测跨度补空」被统一网格取代：
+     * 轴恒为页内全部 tick、无切半段，rowByLabel 值=网格行（cells 缺键即缺桶）。
+     * 'YYYY-MM-DD HH:mm' 定宽零填充，字典序即时间序。
+     */
+    buildAxis() {
+      const times = []
+      const rowByLabel = new Map()
+      for (let i = this.tableRows.length - 1; i >= 0; i--) {
+        const row = this.tableRows[i]
+        const label = formatLocalDateTime(row.dataTime, true)
+        times.push(label)
+        rowByLabel.set(label, row)
+      }
+      return { times, rowByLabel }
+    },
+    // 模板格子形态标记（ALARM 带格=矮格样式）
+    isBandSeries(s) {
+      return seriesKind(s) === 'ALARM'
     },
     /**
      * 分图（ADM 形态）：v-for 容器挂载后逐参数全新实例，一次 setOption(notMerge)；
-     * echarts.connect 组队提供官方跨子图联动（tooltip/axisPointer/dataZoom/图例同步）。
+     * echarts.connect 组队提供官方跨子图联动（tooltip/axisPointer/dataZoom/图例同步）——联动按
+     * category 值对齐，数值格与带格必须喂同一份补空时间轴（实测：异轴则兄弟格不同步）。
      * v-if 切换布局后容器是全新元素，实例重建天然完成旧图清理。
      * markRaw 后存 data（见 data() 注释）：实例读取恒为 raw，杜绝经 Proxy 调用。
      */
-    renderSplit(times) {
+    renderSplit(axis) {
       this.disposeSplit()
       if (this.mergeChart) this.mergeChart.clear()
       this.$nextTick(() => {
         const charts = []
-        for (const s of this.series) {
+        for (const s of this.splitSeries) {
           const el = this.splitEls[s.key]
           if (!el) continue
           const inst = markRaw(echarts.init(el))
-          inst.setOption(this.splitCellOption(s, times), true)
+          inst.setOption(this.isBandSeries(s) ? this.splitBandOption(s, axis) : this.splitCellOption(s, axis), true)
           this.splitCharts[s.key] = inst
           charts.push(inst)
         }
         if (charts.length > 1) echarts.connect(charts)
       })
     },
-    /** 分图单格 option：单 grid 单 series 简单形态（教科书用法，宿主实证 Tooltip 正常）。 */
-    splitCellOption(s, times) {
+    /** 分图数值格 option：单 grid 单 series 简单形态（教科书用法，宿主实证 Tooltip 正常）。 */
+    splitCellOption(s, axis) {
       return {
         animation: false,  // 查询即重建的小图动画无收益，走同步渲染
         title: { text: s.name + (s.unit ? ' (' + s.unit + ')' : ''), left: 6, top: 2, textStyle: { fontSize: 12, fontWeight: 500 } },
         tooltip: { trigger: 'axis', confine: true, axisPointer: { type: 'line' } },
         grid: { left: 48, right: 14, top: 30, bottom: 26 },
-        xAxis: { type: 'category', data: times, axisLabel: { hideOverlap: true } },
+        xAxis: { type: 'category', data: axis.times, axisLabel: { hideOverlap: true } },
         yAxis: { type: 'value', scale: true },
         // 单点序列必须显示符号：showSymbol:false 下单点无线段可画=子图空白（1h 窗口小时粒度常态）
-        series: [{ name: s.name, type: 'line', showSymbol: s.points.length <= 1, symbolSize: 7, connectNulls: true, data: this.seriesData(s) }],
+        series: [{ name: s.name, type: 'line', showSymbol: s.points.length <= 1, symbolSize: 7, connectNulls: true, data: this.seriesData(s, axis) }],
+      }
+    },
+    /**
+     * 分图 ALARM 三色状态带格 option（单 series bar + showBackground，实测验证形态）：
+     * 有行桶逐点 itemStyle 着色（alarm=红/normal=绿）、缺桶=null 槽位露灰底；y 轴隐藏（带只承载
+     * 状态不承载量值）；tooltip 挂 formatter——bar 底层数值恒 1 无语义，默认渲染只会显「1」。
+     */
+    splitBandOption(s, axis) {
+      // 逐槽取该 series 的行（缺桶=null）；cells 同时供着色与 formatter 取计数，一次遍历两用
+      const cells = axis.times.map((label) => {
+        const row = axis.rowByLabel.get(label)
+        const p = row && row.cells[s.key]
+        return p && p.value_text != null ? p : null
+      })
+      const stateText = (p) => (p.value_text === 'alarm' ? '报警' : '正常')
+      return {
+        animation: false,
+        title: {
+          text: s.name + (s.unit ? ' (' + s.unit + ')' : ''),
+          left: 6, top: 2, textStyle: { fontSize: 12, fontWeight: 500 },
+          // 三色图例语义=子图注小字（原生 legend 项=series，单 series 带分不出三色）
+          subtext: BAND_LEGEND_TEXT,
+          subtextStyle: { fontSize: 10, rich: BAND_LEGEND_RICH },
+        },
+        tooltip: {
+          trigger: 'axis', confine: true, axisPointer: { type: 'line' },
+          // 三态全覆盖：报警/正常带桶计数（有效 N/共 M），无数据不添计数（无行即无计数）
+          formatter: (params) => {
+            const q = Array.isArray(params) ? params[0] : params
+            const p = cells[q.dataIndex]
+            if (!p) return `${q.name}｜${s.name}：无数据`
+            const counts = this.hasCounts(p) ? `（${this.validHint(p)}）` : ''
+            return `${q.name}｜${s.name}：${stateText(p)}${counts}`
+          },
+        },
+        // top 40 让出「标题+三色图例注」两行高度（图例注与带顶重叠过）；left 44 容下首桶居中标签
+        //（与数值格绘图区左缘基本对齐），避免首/尾桶标签被画布裁切
+        grid: { left: 44, right: 14, top: 40, bottom: 20 },
+        xAxis: { type: 'category', data: axis.times, axisLabel: { hideOverlap: true, fontSize: 10 } },
+        yAxis: { type: 'value', min: 0, max: 1, show: false },
+        series: [{
+          name: s.name,
+          type: 'bar',
+          barWidth: '100%',
+          showBackground: true,
+          backgroundStyle: { color: BAND_NONE_COLOR },
+          data: cells.map((p) => (p ? { value: 1, itemStyle: { color: p.value_text === 'alarm' ? BAND_ALARM_COLOR : BAND_NORMAL_COLOR } } : null)),
+        }],
       }
     },
     /**
@@ -738,68 +1075,100 @@ export default {
      * ——经 reactive Proxy 调 setOption 正是本页 tooltip 失效的根因（bug-record-20260908-233000），
      * markRaw 后与 ADM 同形（raw 实例上驱动），tooltip 原生正常，无需任何绕行。
      */
-    renderMerge(times) {
+    renderMerge(axis) {
       this.disposeSplit()
       if (this.mergeChart) { this.mergeChart.dispose(); this.mergeChart = null }
       this.$nextTick(() => {
         if (!this.$refs.chartEl || this.viewMode !== 'chart' || this.chartLayout !== 'merge') return
         this.mergeChart = markRaw(echarts.init(this.$refs.chartEl))
-        this.mergeChart.setOption(this.mergeChartOption(times), true)
+        this.mergeChart.setOption(this.mergeChartOption(axis), true)
         // resize 容错：渲染 flush 期调用偶发抛异常，尺寸在 init/setOption 已对齐，此处只是兜底
         try { this.mergeChart.resize() } catch (e) { /* 尺寸已对齐，忽略 */ }
       })
     },
-    seriesData(s) {
-      return this.pivotRows.map((r) => {
-        const p = r.cells[s.key]
+    /** 数值 series data：与轴逐槽对齐（缺桶/无值=null，折线 connectNulls 跨接视觉不变）。 */
+    seriesData(s, axis) {
+      return axis.times.map((label) => {
+        const row = axis.rowByLabel.get(label)
+        const p = row && row.cells[s.key]
         return p && p.value != null ? p.value : null
       })
     },
     // 合并：一图多 series，tooltip 逐 series 带 display_unit
-    mergeChartOption(times) {
+    mergeChartOption(axis) {
       // 形态对齐 ADM buildMergeOption：legend 置顶显式 data、axisPointer cross、title 显式关闭。
       // series 名并入单位（legend 与默认 tooltip 渲染均带单位），不挂自定义 formatter——默认渲染
-      // 已按时刻逐 series 出值，少一份函数少一分维护面。
-      const names = this.series.map((s) => s.name + (s.unit ? ' (' + s.unit + ')' : ''))
+      // 已按时刻逐 series 出值，少一份函数少一分维护面。合并仅数值 series（y 轴 value 语义不被文本破坏）。
+      const names = this.chartSeries.map((s) => s.name + (s.unit ? ' (' + s.unit + ')' : ''))
       return {
         title: { show: false },
         animation: false,
         tooltip: { trigger: 'axis', axisPointer: { type: 'cross' } },
         legend: { show: true, type: 'scroll', orient: 'horizontal', top: 4, left: 8, right: 8, height: 28, itemWidth: 18, itemHeight: 10, itemGap: 12, selectedMode: true, data: names },
         grid: { left: 52, right: 16, top: 44, bottom: 32 },
-        xAxis: { type: 'category', data: times, axisLabel: { fontSize: 10, hideOverlap: true } },
+        xAxis: { type: 'category', data: axis.times, axisLabel: { fontSize: 10, hideOverlap: true } },
         yAxis: { type: 'value', scale: true },
-        series: this.series.map((s) => ({
+        series: this.chartSeries.map((s) => ({
           name: s.name + (s.unit ? ' (' + s.unit + ')' : ''),
           type: 'line',
           showSymbol: s.points.length <= 1,  // 单点序列显示符号（否则空白）
           symbolSize: 7,
           connectNulls: true,
-          data: this.seriesData(s),
+          data: this.seriesData(s, axis),
         })),
       }
     },
-    // —— 导出（CSV：本集成 vue-modules 无 xlsx 且禁新增依赖；循环分页拉全量，上限防炸） ——
+    // —— 导出（CSV：本集成 vue-modules 无 xlsx 且禁新增依赖；全窗按网格切段拉取，上限防炸） ——
     async exportCsv() {
       const err = this.validate()
       if (err) { this.errorMsg = err; return }
       if (!this.submittableKeys.length) { this.errorMsg = '请至少勾选一个当前粒度可物化的参数'; return }
+      // 导出窗口按导出档位（EXPORT_PAGE_TICKS/段）自建：切页档位必须与窗口绑定（buildGridWindow
+      // 单一真相），不得复用浏览档窗口再按导出档切段——两套档位混用会切出越界段（start>end 请求）
+      const stepMs = GRANULARITY_STEP_MS[this.filter.granularity] || 0
+      const win = buildGridWindow(this.filter.start, this.filter.end, stepMs, EXPORT_PAGE_TICKS)
+      if (!win) { this.errorMsg = '时间窗内无对齐时刻（窗口不足一个粒度步长）'; return }
       this.exporting = true
       this.errorMsg = ''
       try {
         const base = this.queryBase()
-        const { rows: all, truncated } = await fetchAllHistoryPages(
-          ({ pageNum, pageSize }) => queryHistory({ ...base, pageNum, pageSize }))
+        // 单段 pageSize 同浏览侧口径（段 tick 数×参数数且≥2000，REST 侧 20000 护栏内）
+        const guardPageSize = Math.max(GRID_MIN_QUERY_PAGE_SIZE, EXPORT_PAGE_TICKS * this.submittableKeys.length)
+        const all = []
+        let truncated = false
+        // 全窗网格切段（段边界=网格边界不切半）逐段拉原始桶行，收齐后统一展开网格行——与页面浏览
+        // 同一分页模型；上限按导出行（=tick 数）截断，段循环触及上限即止
+        for (let k = 1; k <= win.pages; k++) {
+          if (all.length >= EXPORT_MAX_ROWS) { truncated = true; break }
+          const seg = gridSegment(win, k)
+          const res = await queryHistory({
+            ...base, start: seg.start, end: seg.end, pageNum: 1, pageSize: guardPageSize, order: 'DESC',
+          })
+          all.push(...(((res || {}).data || {}).rows || []))
+        }
         if (truncated && this.$message) this.$message.warning(`数据量超过 ${EXPORT_MAX_ROWS} 行上限，仅导出前 ${EXPORT_MAX_ROWS} 行`)
-        // 列基准与表格一致=勾选集全集（不可物化/无数据列头保留、值空）
+        // 列基准与表格一致=勾选集全集（不可物化/无数据列头保留、值空）；行=全窗网格降序
+        //（导出/表格/页序同一「最新在前」口径）。计数列仅数值参数跟「有效/总数」（桶内非空样本数/
+        // 总样本数）——非数值参数不跟（2026-09-09 拍板与表格「不显计数」同一裁决），类别判定与
+        // 表格占位同源 seriesKindOf（全窗行集自判，比单页判得更准）
         const sList = buildSeries(this.checked, all, this.metaByKey)
-        const piv = pivotOf(all, sList)
-        const header = ['时刻', ...sList.map((s) => s.name + (s.unit ? ` (${s.unit})` : ''))]
+        const numericByKey = new Map(sList.map((s) => [s.key, this.seriesKindOf(s) === 'NUMERIC']))
+        const ticks = []
+        for (let t = win.lastMs; t >= win.firstMs; t -= win.stepMs) ticks.push(t)
+        const piv = gridPivotRows(ticks, sList)
+        const header = ['时刻', ...sList.flatMap((s) => {
+          const nameCol = s.name + (s.unit ? ` (${s.unit})` : '')
+          return numericByKey.get(s.key) ? [nameCol, s.name + ' 有效/总数'] : [nameCol]
+        })]
         const dataRows = piv.map((r) => [
           formatLocalDateTime(r.dataTime),
-          ...sList.map((s) => {
+          ...sList.flatMap((s) => {
             const p = r.cells[s.key]
-            return p && p.value != null ? p.value : ''
+            // 值列：非数值行导 value_text 原文（alarm/normal/状态串）、数值行导数值
+            const v = this.cellValue(p)
+            if (!numericByKey.get(s.key)) return [v == null ? '' : v]
+            const c = p && this.hasCounts(p) ? this.countText(p) : ''
+            return [v == null ? '' : v, c]
           }),
         ])
         const stamp = formatLocalInputSeconds(new Date()).replace(/\D/g, '')
@@ -922,9 +1291,10 @@ export default {
 .asm-split-grid { display: grid; grid-template-columns: repeat(2, minmax(240px, 1fr)); gap: 6px 18px; align-content: start; height: 100%; overflow-y: auto; padding: 2px; }
 .asm-split-cell { height: 158px; min-width: 0; }
 .asm-split-cell:last-child:nth-child(odd) { grid-column: 1 / -1; }
+/* ALARM 三色带格：矮于数值格（带是状态注记非主曲线）；align-self 免被同排数值格的行轨拉伸回 158px */
+.asm-split-cell--band { height: 122px; align-self: start; }
 .asm-chart-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: #fff; }
 .asm-pager { display: flex; justify-content: flex-end; align-items: center; gap: 10px; margin-top: 8px; flex-shrink: 0; }
-.asm-pager-count { font-size: 12px; color: #606266; }
 
 /* 表列头两行：参数中文 + (display_unit) */
 .asm-col-head { cursor: default; }
@@ -932,6 +1302,8 @@ export default {
 .asm-col-unit { font-size: 12px; color: #909399; font-weight: 400; }
 /* 有效性标记：值后 · 悬浮「有效 N/共 M」（validCount<totalCount 才显） */
 .asm-valid-dot { color: #e6a23c; font-weight: 700; cursor: help; margin-left: 2px; }
+/* 报警态值串专属红（#f56c6c 与 statusBadge danger 同源）：红=报警语义，normal/状态串不占用 */
+.asm-alarm-text { color: #f56c6c; font-weight: 600; }
 .asm-muted { color: #c0c4cc; }
 
 /* 单位弹窗行表（配置页单位 tab 同形态） */

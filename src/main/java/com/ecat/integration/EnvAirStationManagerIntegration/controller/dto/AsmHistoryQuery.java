@@ -42,4 +42,10 @@ public class AsmHistoryQuery {
 
     /** 每页桶数（缺省 50）。 */
     Integer pageSize;
+
+    /**
+     * 排序方向（ASC/DESC；缺省 ASC=SDK 机对机「旧→新」口径不变）。
+     * 仅 REST 历史页传 DESC（网格分页「最新在前」展示口径），service 严格解析非法值抛。
+     */
+    String order;
 }

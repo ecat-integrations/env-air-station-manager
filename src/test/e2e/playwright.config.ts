@@ -38,8 +38,20 @@ export default defineConfig({
   workers: 1,
 
   projects: [
+    // 双层分组（2026-09-09 提速改造，全套 10-11min → ~6min）：
+    //  ro   = 纯读/渲染/mock spec（零服务端写操作，grep 实证）——fullyParallel + CLI --workers=4 并行；
+    //  real = 有状态写操作 spec（g2 交互/g3 角色/g9 单位设置/g11 控制/g12 设备配置）——CLI --workers=1 串行防互染。
+    // project 间由 npm script 链式顺序执行（ro 先 real 后），跨组不并发；
+    // 兼容旧入口：`--project=chromium` 已不存在，全量走 npm run test:asm-e2e。
     {
-      name: 'chromium',
+      name: 'ro',
+      testMatch: /asm-g[45678].*\.spec\.ts|asm-g1[03].*\.spec\.ts/,
+      fullyParallel: true,
+      use: { ...devices['Desktop Chrome'], viewport: { width: 1920, height: 1080 } },
+    },
+    {
+      name: 'real',
+      testMatch: /asm-e2e\.spec\.ts|asm-g9.*\.spec\.ts|asm-g1[12].*\.spec\.ts/,
       use: { ...devices['Desktop Chrome'], viewport: { width: 1920, height: 1080 } },
     },
   ],

@@ -16,7 +16,10 @@ import java.util.function.Function;
 
 /**
  * ASM 设备/参数中文标注服务——REST 出口（alarm-rule list 的 deviceLabels、alarm-record 行的
- * device_label/attr_label、config-stat 行的 device_label/attr_label）的中文 label 唯一来源。
+ * device_label/attr_label、config-stat 行的 device_label/attr_label）与 SDK 报警条目
+ * （{@code queryAlarmEntries} 行 deviceLabel/attrLabel）的中文 label 唯一来源。两套口径：
+ * REST 走 {@link #slotLabel}/{@link #attrLabel} 内联回退原文；SDK 机对机走
+ * {@link #slotLabelOrNull}/{@link #attrLabelOrNull} 原始解析（解析不到=null，回退判定留给消费方）。
  *
  * <ul>
  *   <li><b>槽中文名</b>：与 {@link StationParamMeta} label 同源（37 槽，多实例槽各带实例名如「CO标气」），
@@ -60,19 +63,33 @@ public class AsmDeviceLabelService {
 
     /** 槽中文名：StationParamMeta label 同源；未匹配槽回退 uid 原文。 */
     public String slotLabel(String uid) {
+        String label = slotLabelOrNull(uid);
+        return label != null ? label : uid;
+    }
+
+    /** 参数中文名：registry attrDefs displayName；设备/def 缺席回退 attrId 原文。 */
+    public String attrLabel(String uid, String attrId) {
+        String label = attrLabelOrNull(uid, attrId);
+        return label != null ? label : attrId;
+    }
+
+    /** 槽中文名原始解析：未匹配槽返 null。SDK 机对机口径（{@code queryAlarmEntries} 行的 deviceLabel
+     * 字段）——行内已携带 uid 标识字段，回退判定留给消费方，不内联回退掩盖解析缺口；REST 路径仍走
+     * {@link #slotLabel} 的内联回退（前端无回退逻辑）。 */
+    public String slotLabelOrNull(String uid) {
         for (StationParamMeta slot : StationParamMeta.values()) {
             if (slot.getUniqueId().equals(uid)) {
                 return slot.label;
             }
         }
-        return uid;
+        return null;
     }
 
-    /** 参数中文名：registry attrDefs displayName；设备/def 缺席回退 attrId 原文。 */
-    public String attrLabel(String uid, String attrId) {
+    /** attr displayName 原始解析：设备不在 registry / attr 无 def 返 null（口径同 {@link #slotLabelOrNull}，
+     * 消费方回退 attrId）。 */
+    public String attrLabelOrNull(String uid, String attrId) {
         LogicDevice device = uid == null ? null : deviceResolver.apply(uid);
-        String displayName = device == null ? null : displayNameOf(device, attrId);
-        return displayName != null ? displayName : attrId;
+        return device == null ? null : displayNameOf(device, attrId);
     }
 
     /** alarm-rule 行 deviceLabels：按 device_info uid 顺序逐槽 {槽中文名, [attr 中文名...]}。 */

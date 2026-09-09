@@ -119,4 +119,31 @@
           and status = #{status}
         </if>
     </select>
+
+    <!-- SDK 按报警标识 + 时间窗查询：episode 区间重叠，查询窗左开右闭 (start, end]——end 时刻触发的
+         算本期、恰在 start 闭单的归上期，连续分窗查询（上窗 end=下窗 start）每条报警恰好命中一次
+         （无缝无重）；等价于报警 episode 与开区间时刻集 (start, end] 有交集即命中。end_time 为 null 的
+         ACTIVE 行（持续中）不受比较约束天然命中——修复旧 end_time 落窗锚点查不出持续中的缺陷。 -->
+    <select id="selectEntriesByType" resultMap="AsmAlarmRecordResult">
+        select <include refid="allColumns"/>
+        from asm_alarm_record
+        where alarm_type = #{alarmType}
+          and start_time &lt;= #{end}
+          and (end_time is null or end_time &gt; #{start})
+        order by start_time desc
+        limit #{limit}
+    </select>
+
+    <!-- SDK 报警标识目录：asm_alarm_rule 全量三列投影（ruleName 在 setting_content JSON 内，服务层
+         经规则定义解析并坏行隔离）；partial resultMap 只映射目录所需列（id/时刻列不取）。 -->
+    <resultMap type="com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmAlarmRule" id="AsmAlarmTypeCatalogResult">
+        <result property="alarmType"      column="alarm_type"/>
+        <result property="severity"       column="severity"/>
+        <result property="settingContent" column="setting_content"/>
+    </resultMap>
+    <select id="selectTypeCatalog" resultMap="AsmAlarmTypeCatalogResult">
+        select alarm_type, severity, setting_content
+        from asm_alarm_rule
+        order by alarm_type
+    </select>
 </mapper>

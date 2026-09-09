@@ -6,10 +6,12 @@ import lombok.Value;
 import java.time.Instant;
 
 /**
- * SDK stat 查询结果行——一个参数（站房设备 + attr）在一个时间桶上的 avg-only 聚合值投影。
+ * SDK stat 查询结果行——一个参数（站房设备 + attr）在一个时间桶上的聚合值投影
+ * （数值 series=均值 / 非数值 series=文本统计值）。
  *
  * <p>不可变 DTO（对外稳定契约包成员）。value 是 STORAGE 存储单位的桶均值原值（机对机口径，
- * 不做展示偏好换算；消费方须按 {@link #getUnit()} 解释 value）。</p>
+ * 不做展示偏好换算；消费方须按 {@link #getUnit()} 解释 value）；非数值 series（ALARM/STATE）
+ * value=null、取 {@link #getValueText()}。</p>
  *
  * @author coffee
  */
@@ -26,8 +28,11 @@ public class SdkStatRow {
     /** 桶标注时刻（UTC；BACK=右沿 / FRONT=左沿，由查询入参 mode 决定）。 */
     Instant dataTime;
 
-    /** 桶均值（桶行存在但 avg_value 为 null 时为 null）。 */
+    /** 桶均值（数值 series；桶行存在但 avg_value 为 null 时为 null）。 */
     Double value;
+
+    /** 非数值统计值（ALARM: normal/alarm；STATE: 状态串），原样透传；与 value 互斥同 raw 层惯例，数值行为 null。 */
+    String valueText;
 
     /** 有效样本数。 */
     Long validCount;

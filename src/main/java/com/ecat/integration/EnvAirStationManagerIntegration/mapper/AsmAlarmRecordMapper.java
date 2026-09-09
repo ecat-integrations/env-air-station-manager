@@ -1,13 +1,15 @@
 package com.ecat.integration.EnvAirStationManagerIntegration.mapper;
 
 import com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmAlarmRecord;
+import com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmAlarmRule;
 import org.apache.ibatis.annotations.Param;
 
 import java.time.Instant;
 import java.util.List;
 
 /**
- * ASM 报警记录 mapper（{@code asm_alarm_record}，D2 自有表）——评估触发 insert + 列表/SDK 查询。
+ * ASM 报警记录 mapper（{@code asm_alarm_record}，D2 自有表）——评估触发 insert + 列表/SDK 查询；
+ * 另承载 SDK 报警标识目录源（{@link #selectTypeCatalog} 查 {@code asm_alarm_rule} 投影）。
  *
  * @author coffee
  */
@@ -50,4 +52,25 @@ public interface AsmAlarmRecordMapper {
                    @Param("status") String status,
                    @Param("start") Instant start,
                    @Param("end") Instant end);
+
+    /**
+     * SDK 按报警标识 + 时间窗查询（episode 区间重叠）。查询窗左开右闭 {@code (start, end]}：
+     * end 时刻触发的算本期、恰在 start 闭单的归上期，连续分窗查询无缝无重；end_time=null 的
+     * ACTIVE 行（持续中）开区间到 +∞ 天然命中。trigger_time 降序。
+     *
+     * @param alarmType 报警标识（等值过滤，调用方已校验非空白）
+     * @param start     窗口起（开）
+     * @param end       窗口止（闭）
+     * @param limit     行数上限（调用方已校验 1..1000）
+     */
+    List<AsmAlarmRecord> selectEntriesByType(@Param("alarmType") String alarmType,
+                                             @Param("start") Instant start,
+                                             @Param("end") Instant end,
+                                             @Param("limit") int limit);
+
+    /**
+     * SDK 报警标识目录源（asm_alarm_rule 全量投影：alarm_type/severity/setting_content 三列；
+     * ruleName 在 setting_content JSON 内，由服务层经规则定义解析，坏行隔离跳过）。按 alarmType 升序。
+     */
+    List<AsmAlarmRule> selectTypeCatalog();
 }

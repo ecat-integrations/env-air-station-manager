@@ -25,8 +25,11 @@ public class AsmHistoryBucket {
     /** logic attr id。 */
     String attrId;
 
-    /** 桶内均值。 */
+    /** 桶内均值（数值 series；非数值行为 null）。 */
     Double avgValue;
+
+    /** 非数值统计值（ALARM: normal/alarm；STATE: 状态串）；与 avgValue 互斥，数值行为 null。 */
+    String valueText;
 
     /** 有效样本数。 */
     Long validCount;

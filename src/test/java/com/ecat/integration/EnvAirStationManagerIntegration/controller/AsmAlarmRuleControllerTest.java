@@ -61,7 +61,7 @@ class AsmAlarmRuleControllerTest {
     /** settingContent 无 configurable 字段（parse→false=系统预置，对应 seed 规则 3/14/15/17/18/22 形态）。 */
     private static AsmAlarmRule validRule(String severity) {
         return AsmAlarmRule.builder()
-                .alarmType("3").severity(severity)
+                .alarmType("water_leak").severity(severity)
                 .settingContent("{\"name\":\"漏水\",\"enabled\":true,"
                         + "\"device_info\":{\"logicdevice_station.security_alarm\":[\"water_leak\"]}}")
                 .sort(1).build();
@@ -70,7 +70,7 @@ class AsmAlarmRuleControllerTest {
     /** settingContent 带 configurable:true（用户可配置行，端点创建/参数化 seed 规则形态）。 */
     private static AsmAlarmRule configurableRule(String severity) {
         return AsmAlarmRule.builder()
-                .alarmType("3").severity(severity)
+                .alarmType("room_temp_abnormal").severity(severity)
                 .settingContent("{\"name\":\"温度\",\"enabled\":true,\"configurable\":true,"
                         + "\"device_info\":{\"logicdevice_station.th\":[\"temperature\"]}}")
                 .sort(1).build();
@@ -119,7 +119,7 @@ class AsmAlarmRuleControllerTest {
 
     @Test
     void add_badSettingContentRejected() {
-        AsmAlarmRule bad = AsmAlarmRule.builder().alarmType("3").severity("0")
+        AsmAlarmRule bad = AsmAlarmRule.builder().alarmType("water_leak").severity("0")
                 .settingContent("not-json").build();
         org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
                 () -> controller.add(bad));
@@ -145,7 +145,7 @@ class AsmAlarmRuleControllerTest {
         ServiceException ex = assertThrows(ServiceException.class, () -> controller.add(validRule("0")));
 
         assertEquals(Integer.valueOf(400), ex.getCode());
-        assertEquals("报警标识已存在: 3", ex.getMessage());
+        assertEquals("报警标识已存在: water_leak", ex.getMessage());
         verify(ruleMapper, never()).insert(any(AsmAlarmRule.class));
         verify(index, never()).reload();
     }
@@ -207,7 +207,7 @@ class AsmAlarmRuleControllerTest {
     void list_appendsDeviceLabels_withRegistryResolutionAndFallback() {
         // device_info 三槽顺序：th（registry 有 def + 缺 def 混合）/ standard_gas.co（多实例槽中文名，
         // registry 无设备）/ regulated_power（非槽 uid）——一次锁死槽解析、attr 解析、双回退与顺序契约
-        AsmAlarmRule rule = AsmAlarmRule.builder().alarmType("1").severity("0").sort(1)
+        AsmAlarmRule rule = AsmAlarmRule.builder().alarmType("room_temp_abnormal").severity("0").sort(1)
                 .settingContent("{\"name\":\"温度\",\"enabled\":true,\"device_info\":{"
                         + "\"logicdevice_station.th\":[\"temperature\",\"temperature_indoor\"],"
                         + "\"logicdevice_station.standard_gas.co\":[\"gas_pressure_remaining\"],"
@@ -247,12 +247,12 @@ class AsmAlarmRuleControllerTest {
         when(ruleMapper.selectAll()).thenReturn(Collections.singletonList(validRule("0")));
         List<AsmAlarmRuleRowDto> rows = controller.list();
         assertEquals(1, rows.size());
-        assertEquals("3", rows.get(0).getRule().getAlarmType());
+        assertEquals("water_leak", rows.get(0).getRule().getAlarmType());
     }
 
     @Test
     void getById_delegatesToMapper() {
         when(ruleMapper.selectById(7L)).thenReturn(validRule("0"));
-        assertEquals("3", controller.getById(7L).getAlarmType());
+        assertEquals("water_leak", controller.getById(7L).getAlarmType());
     }
 }

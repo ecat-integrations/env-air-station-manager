@@ -38,7 +38,9 @@ ALTER TABLE asm_data_sample SET (
 CREATE INDEX IF NOT EXISTS idx_asm_sample_logic_attr_time ON asm_data_sample (logic_device_unique_id, attr_id, data_time DESC);
 
 -- ===== 三级 stat 分区父表（minute ← raw / 5min ← minute / hour ← minute）=====
--- avg-only 精简引擎（D3）：每桶 avg_value + valid_count/total_count 计数，无 min/max/statuses 等扩展列。
+-- 每桶双值槽：数值 avg_value（均值）/ 非数值 value_text（ALARM: normal/alarm；STATE: 状态串），
+-- 互斥不变式与 raw 层 value_num/value_text 同构（数值行 value_text=NULL、非数值行 avg_value=NULL）；
+-- 另有 valid_count/total_count 计数，无 min/max/statuses 等扩展列。
 -- PK(data_time, logic_device_unique_id, attr_id, interval_mode)：多 mode 并存下同桶 BACK/FRONT 各自独立一行；
 -- ON CONFLICT 按 4 列定冲突（重算/回补幂等，DO UPDATE 全量覆盖 + 刷 updated_at）。
 -- 月度分区（PARTITION BY RANGE (data_time) 按 UTC 月一表如 asm_stat_minute_202608）：分区由 app 层
@@ -52,7 +54,8 @@ CREATE TABLE IF NOT EXISTS asm_stat_minute (
     logic_device_unique_id varchar(64) NOT NULL,
     attr_id                varchar(64) NOT NULL,
     interval_mode          smallint    NOT NULL,   -- 区间模式（AsmIntervalMode.code：FRONT=1 / BACK=2）；进 PK 多 mode 并存
-    avg_value              double precision,       -- 桶内均值（avg-only 引擎唯一聚合值）
+    avg_value              double precision,       -- 桶内均值（数值 series；非数值行为 NULL）
+    value_text             text,                   -- 非数值统计值（ALARM: normal/alarm；STATE: 状态串）；数值行为 NULL
     valid_count            bigint,                 -- 有效样本数（非空数值且状态有效）
     total_count            bigint,                 -- 非空值计数（占比分母）
     updated_at             timestamptz NOT NULL DEFAULT now(),  -- 最近一次物化覆盖时刻（upsert 刷）
@@ -60,7 +63,7 @@ CREATE TABLE IF NOT EXISTS asm_stat_minute (
 ) PARTITION BY RANGE (data_time);
 CREATE INDEX IF NOT EXISTS idx_asm_stat_minute_logic_attr_time
     ON asm_stat_minute (logic_device_unique_id, attr_id, interval_mode, data_time DESC);
-COMMENT ON TABLE asm_stat_minute IS '分钟统计月度分区父表(基础层←raw;app 自管 avg-only 物化;PG 声明式 RANGE 分区按 UTC 月,分区由 AsmStatPartitionManager 写路径 ensure,无 DEFAULT 分区缺分区 INSERT 显式报错);PK 含 interval_mode 多 mode 并存(BACK/FRONT);ON CONFLICT 4 列 DO UPDATE 全量覆盖幂等';
+COMMENT ON TABLE asm_stat_minute IS '分钟统计月度分区父表(基础层←raw;app 自管物化,数值 avg_value/非数值 value_text 互斥双值槽;PG 声明式 RANGE 分区按 UTC 月,分区由 AsmStatPartitionManager 写路径 ensure,无 DEFAULT 分区缺分区 INSERT 显式报错);PK 含 interval_mode 多 mode 并存(BACK/FRONT);ON CONFLICT 4 列 DO UPDATE 全量覆盖幂等';
 
 -- 5 分钟统计（层级 ← minute）
 CREATE TABLE IF NOT EXISTS asm_stat_5min (
@@ -69,6 +72,7 @@ CREATE TABLE IF NOT EXISTS asm_stat_5min (
     attr_id                varchar(64) NOT NULL,
     interval_mode          smallint    NOT NULL,
     avg_value              double precision,
+    value_text             text,
     valid_count            bigint,
     total_count            bigint,
     updated_at             timestamptz NOT NULL DEFAULT now(),
@@ -85,6 +89,7 @@ CREATE TABLE IF NOT EXISTS asm_stat_hour (
     attr_id                varchar(64) NOT NULL,
     interval_mode          smallint    NOT NULL,
     avg_value              double precision,
+    value_text             text,
     valid_count            bigint,
     total_count            bigint,
     updated_at             timestamptz NOT NULL DEFAULT now(),
@@ -173,7 +178,7 @@ END $$;
 -- ===== asm_alarm_rule — 动环报警规则（P3；setting_content JSON 契约兼容 env_alarm_settings：device_info: uniqueId→[attrId]、name/description/icon/category/enabled/configurable、configs[type=range/number/duration/setting]，扩展 check/compare/match/severity）=====
 CREATE TABLE asm_alarm_rule (
     id                bigserial     PRIMARY KEY,
-    alarm_type        varchar(16)   NOT NULL,   -- 报警类型编码（动环域语义，移植 env-alarm-manager 1/2/3/4/5/6/8*/9*/12/14/15/17/18/22/23*/1010；*为参数化改写）
+    alarm_type        varchar(64)   NOT NULL,   -- 报警标识（语义化 snake_case，全局唯一，供其他集成 SDK 查询；动环域语义移植 env-alarm-manager，最长 sampling_tube_temp_abnormal=27）
     severity          varchar(2)    NOT NULL DEFAULT '0',  -- 0普通/1重要/2紧急（规则级可配）
     setting_content   text          NOT NULL,   -- 规则 JSON（设备/参数引用一律参数化，零硬编码）
     sort              integer       DEFAULT 0,
@@ -188,7 +193,7 @@ COMMENT ON TABLE asm_alarm_rule IS 'ASM 动环报警规则;坏配置在索引加
 -- ===== asm_alarm_record — ASM 自有报警记录（D2：不写 env-data-manager 表）=====
 CREATE TABLE asm_alarm_record (
     id                       bigserial    PRIMARY KEY,
-    alarm_type               varchar(16)  NOT NULL,
+    alarm_type               varchar(64)  NOT NULL,
     rule_name                varchar(100) NOT NULL,  -- setting_content.name 快照
     logic_device_unique_id   varchar(128) NOT NULL,
     attr_id                  varchar(64)  NOT NULL,
@@ -204,25 +209,26 @@ CREATE TABLE asm_alarm_record (
 CREATE INDEX IF NOT EXISTS idx_asm_alarm_record_window ON asm_alarm_record (end_time DESC);
 CREATE INDEX IF NOT EXISTS idx_asm_alarm_record_device ON asm_alarm_record (logic_device_unique_id, end_time DESC);
 CREATE INDEX IF NOT EXISTS idx_asm_alarm_record_active ON asm_alarm_record (status, last_breach_time);
+CREATE INDEX IF NOT EXISTS idx_asm_alarm_record_type ON asm_alarm_record (alarm_type, start_time DESC);  -- SDK 按标识+时间窗查询
 COMMENT ON TABLE asm_alarm_record IS 'ASM 报警记录(心跳窗生命周期,镜像 adm_alarm):身份(uid,attr,alarm_type);ACTIVE 行 start_time=首触发/end_time=null/last_breach_time=每次命中续期;窗口内再触发只续期不落新行;1min sweep 过窗闭单 INACTIVE+end_time=now;断电恢复落终态恢复行并同闭 ACTIVE 行';
 
 -- ===== P3 规则 seed（动环域语义；airdevice 分析仪域规则不移植）=====
 INSERT INTO asm_alarm_rule (alarm_type, severity, setting_content, sort) VALUES
-('1', '0', '{"name":"设备间温度异常","description":"温度超出范围且持续超时触发","icon":"Thermometer","category":"environment","enabled":true,"configurable":true,"device_info":{"logicdevice_station.th":["temperature","temperature_indoor"]},"configs":[{"label":"温度范围 (℃)","type":"range","value":[18,28]},{"label":"持续时间 (分钟)","type":"duration","value":5}]}', 10),
-('2', '0', '{"name":"设备间湿度异常","description":"湿度超出范围且持续超时触发","icon":"Droplet","category":"environment","enabled":true,"configurable":true,"device_info":{"logicdevice_station.th":["humidity","humidity_indoor"]},"configs":[{"label":"湿度范围 (%RH)","type":"range","value":[30,70]},{"label":"持续时间 (分钟)","type":"duration","value":5}]}', 20),
-('3', '0', '{"name":"设备间漏水","description":"水浸传感器报警触发","icon":"Droplet","category":"environment","enabled":true,"device_info":{"logicdevice_station.security_alarm":["water_leak"]},"configs":[{"type":"status","value":["报警"],"match":"equals"}]}', 30),
-('4', '0', '{"name":"供电电源异常波动","description":"供电电压超出范围且持续超时触发","icon":"Bolt","category":"power","enabled":true,"configurable":true,"device_info":{"logicdevice_station.power_meter":["voltage_a","voltage_b","voltage_c"]},"configs":[{"label":"电压范围 (V)","type":"range","value":[198,242]},{"label":"持续时间 (分钟)","type":"duration","value":5}]}', 40),
-('5', '0', '{"name":"稳压电源异常波动","description":"稳压输出超出范围且持续超时触发","icon":"Zap","category":"power","enabled":true,"configurable":true,"device_info":{"logicdevice_station.regulated_power":["voltage"]},"configs":[{"label":"电压范围 (V)","type":"range","value":[198,242]},{"label":"持续时间 (分钟)","type":"duration","value":5}]}', 50),
-('6', '0', '{"name":"电流异常波动","description":"电流超出范围且持续超时触发","icon":"Activity","category":"power","enabled":true,"configurable":true,"device_info":{"logicdevice_station.power_meter":["current_a","current_b","current_c"]},"configs":[{"label":"电流范围 (A)","type":"range","value":[0,30]},{"label":"持续时间 (分钟)","type":"duration","value":5}]}', 60),
-('9', '1', '{"name":"标准气体更换","description":"钢瓶剩余压力低于阈值预警","icon":"Battery","category":"gas","enabled":true,"configurable":true,"device_info":{"logicdevice_station.standard_gas.co":["gas_pressure_remaining"],"logicdevice_station.standard_gas.nox":["gas_pressure_remaining"],"logicdevice_station.standard_gas.so2":["gas_pressure_remaining"]},"configs":[{"label":"钢瓶气压力阈值 (kPa)","type":"number","class":"gas_pressure_remaining","value":500,"compare":"lt"}]}', 130),
-('12', '0', '{"name":"采样总管温度异常","description":"采样总管温度超出范围且持续超时触发","icon":"Thermometer","category":"sampling","enabled":true,"configurable":true,"device_info":{"logicdevice_station.sampling_tube":["temperature"]},"configs":[{"label":"温度范围 (℃)","type":"range","value":[30,40]},{"label":"持续时间 (分钟)","type":"duration","value":5}]}', 70),
-('14', '0', '{"name":"设备监测报警","description":"站房监测设备报警状态触发","icon":"Settings","category":"equipment","enabled":true,"device_info":{"logicdevice_station.calibrator":["alarm_status"]},"configs":[{"type":"status","value":["报警","ON","低报警","高报警"],"match":"equals"}]}', 80),
-('15', '2', '{"name":"断电和恢复报警","description":"电压低于阈值报警，恢复后记录恢复","icon":"Power","category":"power","enabled":true,"device_info":{"logicdevice_station.power_meter":["voltage_a","voltage_b","voltage_c"]},"configs":[{"label":"断电电压阈值 (V)","type":"number","class":"power","value":100}]}', 90),
-('17', '1', '{"name":"异常进入报警","description":"摄像头入侵检测报警触发","icon":"User","category":"security","enabled":true,"device_info":{"logicdevice_station.camera.1":["intrusion_alarm"],"logicdevice_station.camera.2":["intrusion_alarm"],"logicdevice_station.camera.3":["intrusion_alarm"],"logicdevice_station.camera.4":["intrusion_alarm"]},"configs":[{"type":"status","value":["报警"],"match":"equals"}]}', 180),
-('18', '1', '{"name":"干扰报警","description":"摄像头干扰检测报警触发","icon":"Radio","category":"security","enabled":true,"device_info":{"logicdevice_station.camera.1":["interference_alarm"],"logicdevice_station.camera.2":["interference_alarm"],"logicdevice_station.camera.3":["interference_alarm"],"logicdevice_station.camera.4":["interference_alarm"]},"configs":[{"type":"status","value":["报警"],"match":"equals"}]}', 190),
-('22', '1', '{"name":"门禁异常使用报警","description":"门禁事件含失败/超时/超次/不匹配关键词触发","icon":"Lock","category":"security","enabled":true,"device_info":{"logicdevice_station.access_control":["event_info"]},"configs":[{"type":"status","value":["失败","超时","超次","不匹配"],"match":"contains"}]}', 200),
-('23', '1', '{"name":"站房洁净度报警","description":"站房内 PM 浓度超过阈值触发","icon":"Wind","category":"environment","enabled":true,"configurable":true,"device_info":{"logicdevice_station.indoor_pollutant":["pm10_indoor","pm25_indoor"]},"configs":[{"label":"PM10 阈值 (ug/m3)","type":"number","class":"pm10_indoor","value":150},{"label":"PM2.5 阈值 (ug/m3)","type":"number","class":"pm25_indoor","value":75}]}', 210),
-('1010', '0', '{"name":"超出范围报警","description":"通用参数超范围持续报警（多参数自定义）","icon":"AlertTriangle","category":"equipment","enabled":false,"configurable":true,"device_info":{"logicdevice_station.th":["temperature"]},"configs":[{"label":"范围","type":"range","value":[18,28]},{"label":"持续时间 (分钟)","type":"duration","value":5}]}', 220)
+('room_temp_abnormal', '0', '{"name":"设备间温度异常","description":"温度超出范围且持续超时触发","icon":"Thermometer","category":"environment","enabled":true,"configurable":true,"device_info":{"logicdevice_station.th":["temperature","temperature_indoor"]},"configs":[{"label":"温度范围 (℃)","type":"range","value":[18,28]},{"label":"持续时间 (分钟)","type":"duration","value":5}]}', 10),
+('room_humidity_abnormal', '0', '{"name":"设备间湿度异常","description":"湿度超出范围且持续超时触发","icon":"Droplet","category":"environment","enabled":true,"configurable":true,"device_info":{"logicdevice_station.th":["humidity","humidity_indoor"]},"configs":[{"label":"湿度范围 (%RH)","type":"range","value":[30,70]},{"label":"持续时间 (分钟)","type":"duration","value":5}]}', 20),
+('water_leak', '0', '{"name":"设备间漏水","description":"水浸传感器报警触发","icon":"Droplet","category":"environment","enabled":true,"device_info":{"logicdevice_station.security_alarm":["water_leak"]},"configs":[{"type":"status","value":["报警"],"match":"equals"}]}', 30),
+('supply_voltage_abnormal', '0', '{"name":"供电电源异常波动","description":"供电电压超出范围且持续超时触发","icon":"Bolt","category":"power","enabled":true,"configurable":true,"device_info":{"logicdevice_station.power_meter":["voltage_a","voltage_b","voltage_c"]},"configs":[{"label":"电压范围 (V)","type":"range","value":[198,242]},{"label":"持续时间 (分钟)","type":"duration","value":5}]}', 40),
+('regulated_voltage_abnormal', '0', '{"name":"稳压电源异常波动","description":"稳压输出超出范围且持续超时触发","icon":"Zap","category":"power","enabled":true,"configurable":true,"device_info":{"logicdevice_station.regulated_power":["voltage"]},"configs":[{"label":"电压范围 (V)","type":"range","value":[198,242]},{"label":"持续时间 (分钟)","type":"duration","value":5}]}', 50),
+('current_abnormal', '0', '{"name":"电流异常波动","description":"电流超出范围且持续超时触发","icon":"Activity","category":"power","enabled":true,"configurable":true,"device_info":{"logicdevice_station.power_meter":["current_a","current_b","current_c"]},"configs":[{"label":"电流范围 (A)","type":"range","value":[0,30]},{"label":"持续时间 (分钟)","type":"duration","value":5}]}', 60),
+('gas_cylinder_low', '1', '{"name":"标准气体更换","description":"钢瓶剩余压力低于阈值预警","icon":"Battery","category":"gas","enabled":true,"configurable":true,"device_info":{"logicdevice_station.standard_gas.co":["gas_pressure_remaining"],"logicdevice_station.standard_gas.nox":["gas_pressure_remaining"],"logicdevice_station.standard_gas.so2":["gas_pressure_remaining"]},"configs":[{"label":"钢瓶气压力阈值 (kPa)","type":"number","class":"gas_pressure_remaining","value":500,"compare":"lt"}]}', 130),
+('sampling_tube_temp_abnormal', '0', '{"name":"采样总管温度异常","description":"采样总管温度超出范围且持续超时触发","icon":"Thermometer","category":"sampling","enabled":true,"configurable":true,"device_info":{"logicdevice_station.sampling_tube":["temperature"]},"configs":[{"label":"温度范围 (℃)","type":"range","value":[30,40]},{"label":"持续时间 (分钟)","type":"duration","value":5}]}', 70),
+('device_monitor_alarm', '0', '{"name":"设备监测报警","description":"站房监测设备报警状态触发","icon":"Settings","category":"equipment","enabled":true,"device_info":{"logicdevice_station.calibrator":["alarm_status"]},"configs":[{"type":"status","value":["报警","ON","低报警","高报警"],"match":"equals"}]}', 80),
+('power_loss', '2', '{"name":"断电和恢复报警","description":"电压低于阈值报警，恢复后记录恢复","icon":"Power","category":"power","enabled":true,"device_info":{"logicdevice_station.power_meter":["voltage_a","voltage_b","voltage_c"]},"configs":[{"label":"断电电压阈值 (V)","type":"number","class":"power","value":100}]}', 90),
+('intrusion', '1', '{"name":"异常进入报警","description":"摄像头入侵检测报警触发","icon":"User","category":"security","enabled":true,"device_info":{"logicdevice_station.camera.1":["intrusion_alarm"],"logicdevice_station.camera.2":["intrusion_alarm"],"logicdevice_station.camera.3":["intrusion_alarm"],"logicdevice_station.camera.4":["intrusion_alarm"]},"configs":[{"type":"status","value":["报警"],"match":"equals"}]}', 180),
+('interference', '1', '{"name":"干扰报警","description":"摄像头干扰检测报警触发","icon":"Radio","category":"security","enabled":true,"device_info":{"logicdevice_station.camera.1":["interference_alarm"],"logicdevice_station.camera.2":["interference_alarm"],"logicdevice_station.camera.3":["interference_alarm"],"logicdevice_station.camera.4":["interference_alarm"]},"configs":[{"type":"status","value":["报警"],"match":"equals"}]}', 190),
+('access_control_abnormal', '1', '{"name":"门禁异常使用报警","description":"门禁事件含失败/超时/超次/不匹配关键词触发","icon":"Lock","category":"security","enabled":true,"device_info":{"logicdevice_station.access_control":["event_info"]},"configs":[{"type":"status","value":["失败","超时","超次","不匹配"],"match":"contains"}]}', 200),
+('indoor_pm_abnormal', '1', '{"name":"站房洁净度报警","description":"站房内 PM 浓度超过阈值触发","icon":"Wind","category":"environment","enabled":true,"configurable":true,"device_info":{"logicdevice_station.indoor_pollutant":["pm10_indoor","pm25_indoor"]},"configs":[{"label":"PM10 阈值 (ug/m3)","type":"number","class":"pm10_indoor","value":150},{"label":"PM2.5 阈值 (ug/m3)","type":"number","class":"pm25_indoor","value":75}]}', 210),
+('range_exceeded', '0', '{"name":"超出范围报警","description":"通用参数超范围持续报警（多参数自定义）","icon":"AlertTriangle","category":"equipment","enabled":false,"configurable":true,"device_info":{"logicdevice_station.th":["temperature"]},"configs":[{"label":"范围","type":"range","value":[18,28]},{"label":"持续时间 (分钟)","type":"duration","value":5}]}', 220)
 ON CONFLICT (alarm_type) DO NOTHING;
 
 -- ===== asm_control_record — 控制审计（P4 设计 §7；统一控制服务 AsmControlService 唯一收口，REST REMOTE / SDK LOCAL 两路同源）=====
@@ -248,14 +254,14 @@ CREATE INDEX IF NOT EXISTS idx_asm_control_record_time ON asm_control_record (cr
 CREATE INDEX IF NOT EXISTS idx_asm_control_record_device ON asm_control_record (logic_device_unique_id, created_at DESC);
 COMMENT ON TABLE asm_control_record IS 'ASM 控制审计;先落 PENDING(before/requested)执行后回填终态(after/result/error/duration);已知边界:绕过 ASM 直打 core/logicdevice-api 的写不经此审计';
 
--- ===== P4 补移植 alarm_type=8 标准气体泄漏（bug-record-20260818-111500：注释声称移植但 seed 缺行）=====
+-- ===== P4 补移植标气泄漏规则 gas_leak（语义化改名前值为 '8'；bug-record-20260818-111500：注释声称移植但 seed 缺行）=====
 -- 语义移植 env-alarm-manager checkAlarmGasLeakage：标气泄漏检测数据超阈值触发 + 联动开排风扇；
 -- 修复点3：风扇 uid/attr/写值参数化进 configs setting（原硬编码 fanDeviceId），联动经 AsmControlService 以 LOCAL/asm-alarm 收口审计。
 -- 2026-08-19 bug-record-20260818-234100：触发 attr 改 standard_gas 实际泄漏检测属性 gas_leak_data
 --   （StandardGasLogicDeviceMapping.createGasLeakDataAttr，NUMERIC/PPM，gas_leak_alarm 即由它 UpperThreshold 派生）；
 --   联动 param_id fan_speed→speed（ExhaustFanLogicDevice SpeedOptions）。
 INSERT INTO asm_alarm_rule (alarm_type, severity, setting_content, sort) VALUES
-('8', '1', '{"name":"标准气体泄漏","description":"标气泄漏检测浓度超阈值触发并联动开排风扇","icon":"FlaskConical","category":"gas","enabled":true,"configurable":true,"device_info":{"logicdevice_station.standard_gas.co":["gas_leak_data"],"logicdevice_station.standard_gas.nox":["gas_leak_data"],"logicdevice_station.standard_gas.so2":["gas_leak_data"]},"configs":[{"label":"泄漏检测浓度阈值 (ppm)","type":"number","class":"gas_leak_data","value":50,"compare":"gt"},{"type":"setting","device_id":"logicdevice_station.exhaust_fan","param_id":"speed","value":"high"}]}', 120)
+('gas_leak', '1', '{"name":"标准气体泄漏","description":"标气泄漏检测浓度超阈值触发并联动开排风扇","icon":"FlaskConical","category":"gas","enabled":true,"configurable":true,"device_info":{"logicdevice_station.standard_gas.co":["gas_leak_data"],"logicdevice_station.standard_gas.nox":["gas_leak_data"],"logicdevice_station.standard_gas.so2":["gas_leak_data"]},"configs":[{"label":"泄漏检测浓度阈值 (ppm)","type":"number","class":"gas_leak_data","value":50,"compare":"gt"},{"type":"setting","device_id":"logicdevice_station.exhaust_fan","param_id":"speed","value":"high"}]}', 120)
 ON CONFLICT (alarm_type) DO NOTHING;
 
 -- ===== P? 站房设备变更追溯 asm_device_change_record（设备配置管理复刻 ADM，append-only 审计流水）=====

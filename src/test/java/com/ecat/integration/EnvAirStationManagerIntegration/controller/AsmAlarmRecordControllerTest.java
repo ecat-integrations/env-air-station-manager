@@ -63,12 +63,12 @@ class AsmAlarmRecordControllerTest {
         Instant t1 = Instant.parse("2026-08-15T01:00:00Z");
         Instant t2 = Instant.parse("2026-08-15T01:05:00Z");
         AsmAlarmRecord closed = AsmAlarmRecord.builder()
-                .id(1L).alarmType("9").ruleName("标准气体更换")
+                .id(1L).alarmType("gas_cylinder_low").ruleName("标准气体更换")
                 .logicDeviceUniqueId("logicdevice_station.standard_gas.co")
                 .attrId("gas_pressure_remaining")
                 .startTime(t1).endTime(t2).status("INACTIVE").build();
         AsmAlarmRecord active = AsmAlarmRecord.builder()
-                .id(2L).alarmType("1").ruleName("设备间温度异常")
+                .id(2L).alarmType("room_temp_abnormal").ruleName("设备间温度异常")
                 .logicDeviceUniqueId("logicdevice_station.th")
                 .attrId("temperature")
                 .startTime(t1).status("ACTIVE").build();
@@ -114,7 +114,7 @@ class AsmAlarmRecordControllerTest {
     void rowDto_serializesFlattenedContractKeys() throws Exception {
         // 平铺契约：旧字段（alarmType/startTime...）保留原路径，新键 snake_case，不产生 record 包裹层
         AsmAlarmRecord record = AsmAlarmRecord.builder()
-                .id(7L).alarmType("1").ruleName("设备间温度异常")
+                .id(7L).alarmType("room_temp_abnormal").ruleName("设备间温度异常")
                 .logicDeviceUniqueId("logicdevice_station.th").attrId("temperature")
                 .startTime(Instant.parse("2026-08-15T01:00:00Z")).status("ACTIVE").build();
         String json = new ObjectMapper().findAndRegisterModules()

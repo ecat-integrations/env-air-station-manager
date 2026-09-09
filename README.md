@@ -7,9 +7,9 @@
 | 能力 | 说明 |
 |---|---|
 | 数据管道 | 总线消费站房设备事件 → `asm_data_sample`（raw，TimescaleDB hypertable）；新 series 首见自动 seed 聚合/单位配置 |
-| 三级均值聚合 | minute/5min/hour 级联（加权均值，非均值再均值）；FRONT=[S,E)/BACK=(L,R] 双标物化（HJ663 口径），按 series 可配 |
+| 三级聚合 | minute/5min/hour 级联：数值=加权均值（非均值再均值）；非数值 bind attr（白名单 16 项，`AsmStatSeriesKindClassifier` 真相源）=ALARM（minute 窗口任一报警→alarm / 5min 点采样 / hour 全窗任一报警）与 STATE（minute 距桶标最近样本 / 5min·hour 点采样）两口径，落 `value_text` 与 avg_value 互斥；FRONT=[S,E)/BACK=(L,R] 双标物化（HJ663 口径），按 series 可配。规则真相源 `docs/stat-series-rules.md` |
 | 历史查询 | REST 按粒度/mode/参数/时间窗查询 + 单位偏好出口（换算，缺行显原生） |
-| 动环报警 | seed 规则（温湿度/供电/漏水/门禁/标气泄漏等），range+持续 / 瞬时阈值 / 状态串三类判定，热加载、报警联动（如泄漏→开排风扇） |
+| 动环报警 | seed 规则（温湿度/供电/漏水/门禁/标气泄漏等 16 类，报警标识语义化 snake_case 如 `water_leak`/`room_temp_abnormal`），range+持续 / 瞬时阈值 / 状态串三类判定，热加载、报警联动（如泄漏→开排风扇） |
 | 控制审计 | 统一控制收口（REST=REMOTE / SDK=LOCAL 双入口），`asm_control_record` 记录调用方、执行前后值、终态（PENDING→SUCCESS/FAILED/TIMEOUT） |
 | 设备控制页 | 总览抽屉入口 → `device_control`：DM 配置驱动的 7 台可控设备 card 墙，批量确认/撤销 + 串行逐 attr 提交，终态 SSE 流式回显（无轮询） |
 | 对外 SDK | `AirStationSdk`（api 包零依赖），其他集成进程内取用查询/报警/控制能力 |
@@ -28,7 +28,7 @@
 ## 设备配置页（station_device，2026-08-21）
 
 - **结构**（照 ADM air_device 四组件）：左 sidebar 37 类型槽（22 类型，多实例类型逐槽）分组全景 + 已配置 ✓ 徽标；右 Detail 三态状态机（未配置→「配置设备」蓝钮；已配置→更换设备/修改配置/移除）；复用弹窗（add/replace，当前台标灰，底部「+配置新设备」常驻）；配置向导（vendor 选型 + lit `<flow-form>` schema 驱动步进，CREATE_ENTRY 后端原子收口，前端只关弹窗刷新）。
-- **后端契约**：`/asm-monitor/device/*` 11 端点（读 `asm-monitor:device:list` / 写 `asm-monitor:device:edit`），三态纯读 registry；provision→submit→CREATE_ENTRY 原子收口+失败回滚；变更审计落 `asm_device_change_record`（FIRST_BIND/REBIND/REPLACE/UNBIND/RECONFIGURE，append-only）。设计真相源 `docs/design/2026-08-21-asm-station-device-config.md`。
+- **后端契约**：`/asm-monitor/device/*` 11 端点（读 `asm-monitor:device:list` / 写 `asm-monitor:device:edit`），三态纯读 registry；provision→submit→CREATE_ENTRY 原子收口+失败回滚；变更审计落 `asm_device_change_record`（FIRST_BIND/REBIND/REPLACE/UNBIND/RECONFIGURE，append-only）。现行设计 `docs/device-config.md`。
 - **启动装载门控**：airstation logic 设备就绪前显骨架横幅（轮询 snapshot 非空），勿把 registry 空渲染成「全部未配置」。
 - **前端元数据**：`stationParamMeta.js` 37 槽 label/分组（与后端 StationParamMeta 枚举名 join）；槽列表/绑定状态动态取 `GET /device/params`。
 - **config-flow lit lib**：`static/lib/config-flow`（webpack CopyPlugin 进 `dist/lib/config-flow/`），Dialog 从本集成 bundle script tag 反推 publicPath 加载。
@@ -68,9 +68,9 @@ DDL 手动 apply（无自动迁移）：`src/main/resources/sql/asm_data.sql`（
 |---|---|
 | `GET /snapshot?unit=standard\|custom` | 站房设备实时态（attr 行带 status 枚举/attrGroup 分组键；activeAlarms=活跃报警明细） |
 | `GET /stream?token=` | 总览 SSE 长连接（具名帧 device.data.update；帧含双单位值+status+ruleAlarmActive） |
-| `GET /history` | granularity / params / mode / unit / start / end / 分页 |
+| `GET /history` | granularity / params / mode / unit / start / end / 分页；行含 `value`（数值均值）与 `value_text`（非数值统计值，互斥） |
 | `GET /stat-params` | 可查参数目录（SDK 同源） |
-| `/alarm-rule` CRUD、`GET /alarm-record/list?status=` | 报警规则（改后热加载；list 行含 `deviceLabels`[{slot,attrs}] 中文标注；写端点 alarmType 治理：重复 400「报警标识已存在」、预置规则（settingContent configurable!=true）标识禁改 400）与记录（状态过滤；行含 `device_label`/`attr_label`/`trigger_time`(=start_time)/`recover_time`(=end_time)/`duration_ms`(活跃行 null)） |
+| `/alarm-rule` CRUD、`GET /alarm-record/list?status=` | 报警规则（改后热加载；list 行含 `deviceLabels`[{slot,attrs}] 中文标注；写端点 alarmType 治理：重复 400「报警标识已存在」、预置规则（settingContent configurable!=true）标识禁改 400）与记录（状态过滤；行含 `device_label`/`attr_label`/`trigger_time`(=start_time)/`recover_time`(=end_time)/`duration_ms`(活跃行 null)；alarmType 为语义化标识如 `water_leak`/`intrusion`，合法值=seed 16 类+用户新建） |
 | `POST /control`、`GET /control-record/list`、`GET /control/{id}` | 控制下发（REMOTE）、审计查询、单条终态查询（仅 SSE 重连补偿用，非轮询通道） |
 | `GET/PUT /config-stat`、`GET/PUT /config-unit` | 聚合配置（enabled/粒度掩码/物化 mode；GET 行含 `device_label`/`attr_label` 中文标注）与单位偏好（STANDARD 行由 seed 维护不开放写）；config-unit PUT 体含可空 `displayPrecision`（0-6，null=不覆盖），snapshot 数值行含 `unitKey`/`displayPrecision`/`unitOptions`（单位设置抽屉数据源） |
 
@@ -79,16 +79,22 @@ DDL 手动 apply（无自动迁移）：`src/main/resources/sql/asm_data.sql`（
 ```java
 AirStationSdk sdk = ((EnvAirStationManagerIntegration) core.getIntegrationRegistry()
     .getIntegration("com.ecat:integration-env-air-station-manager")).getAirStationSdk();
-// queryStat(params, granularity, mode, start, end) —— STORAGE 单位原值，机对机口径
-// listStatParams() / querySnapshot(uid) / queryAlarmRecords(uid, start, end, limit)
+// queryStat(params, granularity, mode, start, end) —— STORAGE 单位原值，机对机口径；
+//     数值 series 均值在 value，非数值 series（ALARM/STATE 白名单）value=null、
+//     统计值在 valueText（ALARM: normal/alarm；STATE: 状态串），unit 空串=显无单位
+// queryAlarmEntries(alarmType, start, end, limit) —— 按报警标识+时间段查报警条目：
+//     窗口左开右闭 (start,end] episode 区间重叠（end 时刻触发算本期、恰在 start 闭单归上期，
+//     连续分窗无缝无重），持续中 ACTIVE 行天然可查；行形状=前端报警表格列+alarmType 回显，
+//     deviceLabel/attrLabel 解析不到=null（回退归消费方）、durationMs 持续中=null
+// listStatParams() / listAlarmTypes()（报警标识目录）/ querySnapshot(uid)
 // control(uid, attrId, value, caller) —— origin=LOCAL，caller=消费方坐标（必填）
 ```
 
-消费方 maven 依赖本 jar（provided），只允许 import `api` 包（护栏测试强制：零 ruoyi/Spring/ecat-core 依赖）。
+消费方 maven 依赖本 jar（provided），只允许 import `api` 包（护栏测试强制：零 ruoyi/Spring/ecat-core 依赖）。**完整方法/DTO/横切语义手册：`docs/sdk.md`**。
 
 ## 测试与回归
 
-- **模块单测**：`mvnd clean test`（251 个，覆盖引擎/规则/生命周期/在线判定/排序/SDK 全域）。
+- **模块单测**：`mvnd clean test`（367 个，覆盖引擎（数值 avg + 非数值 ALARM/STATE）/规则/生命周期/在线判定/排序/SDK 全域）。
 - **浏览器回归（强制，API 冒烟不替代）**：`src/test/e2e/` Playwright 套件，`npm run test:asm-e2e`（g1 六页渲染 / g2 核心交互 / g3 无权限 403 / g4 样式 / g5 中文名同集修约 / g6 单位双模式拼音序 / g7 报警可视化 / g8 报警并集+分组序）。前置：core+8081 起且 vue 注入（globalSetup 自检）。陷阱表见 e2e/README.md。
 - **DB 侧回归**：workspace ruoyi-e2e-test skill 的 `asm-regression.py`（bucket-check / idempotency / compute-log / alarm-check[episode 心跳断言] / control-check / linkage-check）。
 

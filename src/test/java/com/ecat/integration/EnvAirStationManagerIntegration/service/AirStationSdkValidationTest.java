@@ -41,7 +41,7 @@ class AirStationSdkValidationTest {
 
     @BeforeEach
     void setUp() {
-        sdk = new AirStationSdkImpl(historyMapper, unitContract, snapshotService, org.mockito.Mockito.mock(com.ecat.integration.EnvAirStationManagerIntegration.mapper.AsmAlarmRecordMapper.class), org.mockito.Mockito.mock(com.ecat.integration.EnvAirStationManagerIntegration.service.AsmControlService.class));
+        sdk = new AirStationSdkImpl(historyMapper, unitContract, snapshotService, org.mockito.Mockito.mock(com.ecat.integration.EnvAirStationManagerIntegration.mapper.AsmAlarmRecordMapper.class), org.mockito.Mockito.mock(com.ecat.integration.EnvAirStationManagerIntegration.service.AsmDeviceLabelService.class), org.mockito.Mockito.mock(com.ecat.integration.EnvAirStationManagerIntegration.service.AsmControlService.class));
     }
 
     @Test

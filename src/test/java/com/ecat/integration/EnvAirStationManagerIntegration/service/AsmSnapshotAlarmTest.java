@@ -153,7 +153,7 @@ class AsmSnapshotAlarmTest {
     void registrySideAlarm_unionBothSources() {
         registerStationDevice("alarm");
         alarmRegistry.put(new AsmAlarmRegistry.ActiveAlarm(
-                UID, "temperature", "1", "温度异常", T0, T0));
+                UID, "temperature", "room_temp_abnormal", "温度异常", T0, T0));
         List<AsmSnapshotDeviceDto> out = service.buildAll(null);
         assertEquals(2, out.get(0).getActiveAlarms().size());   // 两源并集（attrId+类型粗粒度不重）
     }
@@ -162,9 +162,9 @@ class AsmSnapshotAlarmTest {
     void registryOnlyAlarm_attrNormal_alarmTrue() {
         registerStationDevice("normal");
         alarmRegistry.put(new AsmAlarmRegistry.ActiveAlarm(
-                UID, "temperature", "1", "温度异常", T0, T0));
+                UID, "temperature", "room_temp_abnormal", "温度异常", T0, T0));
         List<AsmSnapshotDeviceDto> out = service.buildAll(null);
         assertEquals(1, out.get(0).getActiveAlarms().size());
-        assertEquals("1", out.get(0).getActiveAlarms().get(0).getAlarmType());
+        assertEquals("room_temp_abnormal", out.get(0).getActiveAlarms().get(0).getAlarmType());
     }
 }

@@ -42,6 +42,13 @@ public class AsmHistoryQueryController extends BaseController {
     private static final ZoneId JVM_ZONE = ZoneId.systemDefault();
 
     /**
+     * pageSize 纯护栏上限（非业务分页档位）：历史页网格分页一次请求要装下「页 tick 数 × 参数数」
+     * 的桶行（前端按 max(2000, 页大小×参数数) 请求），护栏只防异常放大调用，不参与正常分页语义——
+     * 超限被钳位时前端表现为部分网格格无数据（不崩页）。SDK 全窗路径（limit=0）不走本入口不受影响。
+     */
+    static final int MAX_REST_PAGE_SIZE = 20000;
+
+    /**
      * 历史数据查询。
      *
      * @param granularity 粒度（MINUTE/FIVE_MIN/HOUR，必填）
@@ -51,7 +58,8 @@ public class AsmHistoryQueryController extends BaseController {
      * @param mode        区间模式查看视角（FRONT/BACK，缺省 BACK）
      * @param unit        单位模式（standard/custom，缺省 custom）
      * @param pageNum     页码（缺省 1）
-     * @param pageSize    每页桶数（缺省 50）
+     * @param pageSize    每页桶数（缺省 50；护栏钳位 MAX_REST_PAGE_SIZE）
+     * @param order       排序方向（ASC/DESC，缺省 ASC；DESC=历史页「最新在前」展示口径）
      * @return AjaxResult.data = {@link AsmHistoryResult}
      */
     @PreAuthorize("@ss.hasPermi('asm-monitor:history:query')")
@@ -64,7 +72,8 @@ public class AsmHistoryQueryController extends BaseController {
             @RequestParam(value = "mode", required = false) String mode,
             @RequestParam(value = "unit", required = false) String unit,
             @RequestParam(value = "pageNum", required = false) Integer pageNum,
-            @RequestParam(value = "pageSize", required = false) Integer pageSize) {
+            @RequestParam(value = "pageSize", required = false) Integer pageSize,
+            @RequestParam(value = "order", required = false) String order) {
 
         AsmHistoryQuery query = AsmHistoryQuery.builder()
                 .granularity(granularity)
@@ -74,7 +83,9 @@ public class AsmHistoryQueryController extends BaseController {
                 .mode(mode)
                 .unit(unit)
                 .pageNum(pageNum)
-                .pageSize(pageSize)
+                // 仅护栏钳位（上限内原样透传）；缺省不造 50 以外的值，缺省语义归 service
+                .pageSize(pageSize != null ? Math.min(pageSize, MAX_REST_PAGE_SIZE) : null)
+                .order(order)
                 .build();
         AsmHistoryResult result = historyQueryService.query(query);
         return AjaxResult.success(result);

@@ -30,7 +30,7 @@
             :id="anchorId(card.uid)"
             shadow="hover"
             class="asmc-card"
-            :class="{ highlight: focusUid === card.uid, 'device-offline': !card.online }"
+            :class="{ highlight: focusUid === card.uid }"
             :data-asm-uid="card.uid"
           >
             <template #header>
@@ -47,12 +47,16 @@
 
             <div v-for="cmd in card.commands" :key="cmd.attributeId" class="asmc-item" :data-asm-item="cmd.attributeId">
               <span class="asmc-item-label">{{ cmd.commandName }}</span>
+              <!-- 设计变更 2026-09-09：离线不再禁点。在线/离线仅由头部 tag 展示（数据新鲜度口径），
+                   操作可行性交给指令通道本身——提交后 20s 内回 SUCCESS/FAILED/TIMEOUT 终态角标，
+                   真不可达由诚实的失败反馈兜底；静态数据设备（门禁事件驱动）60s 无新值属常态误判，
+                   禁点反而挡住实际能成功的操作。后端 /asm-control 本就无在线门槛。 -->
               <component
                 :is="rendererFor(cmd.displayType)"
                 :cmd="cmd"
                 :value="effectiveValue(card, cmd)"
                 :pending-value="isPending(card, cmd.attributeId) ? effectiveValue(card, cmd) : null"
-                :disabled="!card.online || submittingOf(card)"
+                :disabled="submittingOf(card)"
                 @change="v => onUserChange(card, cmd, v)"
               />
               <el-tag v-if="badgeOf(card, cmd.attributeId)" size="small" disable-transitions
@@ -345,7 +349,8 @@ export default {
 /* important：宿主 ruoyi 全局主题对 .el-card__body 有更高优先级竞争；本选择器以 .asmc-card 命名空间
    隔离不泄漏到宿主页面，压宿主主题取紧凑 12px（设计 §3.3）。 */
 .asmc-card :deep(.el-card__body) { padding: 12px !important; }
-.asmc-card.device-offline :deep(.el-card__body) { opacity: .65; }
+/* 离线降透明已随「离线不禁点」设计变更（2026-09-09）移除：整卡置灰读作「不可用」与可操作矛盾，
+   在线/离线唯一展示 = 头部 tag。 */
 .asmc-card.highlight { outline: 2px solid #409eff; outline-offset: 2px; box-shadow: 0 0 12px rgba(64, 158, 255, .45) !important; }
 .asmc-card-head { display: flex; align-items: center; justify-content: space-between; }
 .asmc-card-title { display: flex; align-items: center; gap: 6px; font-weight: 600; font-size: 14px; color: #303133; }

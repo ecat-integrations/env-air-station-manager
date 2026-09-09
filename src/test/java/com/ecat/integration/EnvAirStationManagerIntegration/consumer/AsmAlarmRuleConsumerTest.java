@@ -94,7 +94,7 @@ class AsmAlarmRuleConsumerTest {
     void stationEvent_evaluatedAndRecordInserted() {
         Instant t = Instant.parse("2026-08-18T00:00:00Z");
         AsmAlarmRecord fired = AsmAlarmRecord.builder()
-                .alarmType("1").ruleName("t").logicDeviceUniqueId("logicdevice_station.th")
+                .alarmType("room_temp_abnormal").ruleName("t").logicDeviceUniqueId("logicdevice_station.th")
                 .attrId("temperature").severity("1").startTime(t).endTime(t).description("d")
                 .status("0").build();
         when(evaluator.evaluate("logicdevice_station.th", "temperature", "30", t))
@@ -104,7 +104,7 @@ class AsmAlarmRuleConsumerTest {
 
         ArgumentCaptor<AsmAlarmRecord> captor = ArgumentCaptor.forClass(AsmAlarmRecord.class);
         verify(lifecycleService).recordTrigger(captor.capture());
-        assertEquals("1", captor.getValue().getAlarmType());
+        assertEquals("room_temp_abnormal", captor.getValue().getAlarmType());
     }
 
     @Test
@@ -134,8 +134,8 @@ class AsmAlarmRuleConsumerTest {
     @Test
     void multipleTriggersInBatch_allInsertedInOrder() {
         Instant t = Instant.parse("2026-08-18T00:00:00Z");
-        AsmAlarmRecord r1 = AsmAlarmRecord.builder().alarmType("1").build();
-        AsmAlarmRecord r2 = AsmAlarmRecord.builder().alarmType("3").build();
+        AsmAlarmRecord r1 = AsmAlarmRecord.builder().alarmType("room_temp_abnormal").build();
+        AsmAlarmRecord r2 = AsmAlarmRecord.builder().alarmType("water_leak").build();
         when(evaluator.evaluate("logicdevice_station.th", "temperature", "30", t))
                 .thenReturn(Arrays.asList(r1, r2));
         consumer.flush(Collections.singletonList(event("station-dev", "temperature", "30")));
@@ -148,7 +148,7 @@ class AsmAlarmRuleConsumerTest {
     private static com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmAlarmRule ruleRow(
             String settingContent) {
         return com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmAlarmRule.builder()
-                .alarmType("8").severity("1").settingContent(settingContent).build();
+                .alarmType("gas_leak").severity("1").settingContent(settingContent).build();
     }
 
     @Test
@@ -164,7 +164,7 @@ class AsmAlarmRuleConsumerTest {
         when(ruleIndex.getRules("logicdevice_station.standard_gas.co", "co_concentration"))
                 .thenReturn(Collections.singletonList(def));
         AsmAlarmRecord fired = AsmAlarmRecord.builder()
-                .alarmType("8").ruleName("标准气体泄漏")
+                .alarmType("gas_leak").ruleName("标准气体泄漏")
                 .logicDeviceUniqueId("logicdevice_station.standard_gas.co")
                 .attrId("co_concentration").severity("1")
                 .startTime(t).endTime(t).description("d").status("0").build();
@@ -198,7 +198,7 @@ class AsmAlarmRuleConsumerTest {
         when(ruleIndex.getRules("logicdevice_station.standard_gas.co", "co_concentration"))
                 .thenReturn(Collections.singletonList(def));
         AsmAlarmRecord fired = AsmAlarmRecord.builder()
-                .alarmType("8").logicDeviceUniqueId("logicdevice_station.standard_gas.co")
+                .alarmType("gas_leak").logicDeviceUniqueId("logicdevice_station.standard_gas.co")
                 .attrId("co_concentration").severity("1")
                 .startTime(t).endTime(t).description("d").status("0").build();
         when(evaluator.evaluate("logicdevice_station.standard_gas.co", "co_concentration", "15", t))
@@ -223,7 +223,7 @@ class AsmAlarmRuleConsumerTest {
         when(ruleIndex.getRules("logicdevice_station.standard_gas.co", "co_concentration"))
                 .thenReturn(Collections.singletonList(def));
         AsmAlarmRecord fired = AsmAlarmRecord.builder()
-                .alarmType("8").logicDeviceUniqueId("logicdevice_station.standard_gas.co")
+                .alarmType("gas_leak").logicDeviceUniqueId("logicdevice_station.standard_gas.co")
                 .attrId("co_concentration").severity("1")
                 .startTime(t).endTime(t).description("d").status("0").build();
         when(evaluator.evaluate("logicdevice_station.standard_gas.co", "co_concentration", "15", t))

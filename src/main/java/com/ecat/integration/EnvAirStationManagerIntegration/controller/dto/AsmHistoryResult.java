@@ -34,6 +34,9 @@ public class AsmHistoryResult {
     /** 每页桶数。 */
     int pageSize;
 
+    /** 窗口内桶行总数（count 与行集同 WHERE，前端据此做真分页页数/总数展示）。 */
+    long total;
+
     /** 行集（dataTime 升序）。 */
     List<Row> rows;
 
@@ -53,6 +56,10 @@ public class AsmHistoryResult {
 
         /** 桶均值（已按 unit 模式换算/直通）。 */
         Double value;
+
+        /** 非数值统计值（ALARM: normal/alarm；STATE: 状态串），原样透传不换算；数值行为 null。 */
+        @JsonProperty("value_text")
+        String valueText;
 
         /** value 实际单位（full key；null=无量纲）。 */
         String unit;

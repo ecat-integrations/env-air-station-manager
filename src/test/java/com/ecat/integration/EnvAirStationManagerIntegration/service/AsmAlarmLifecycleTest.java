@@ -39,7 +39,7 @@ class AsmAlarmLifecycleTest {
     private static final Instant T0 = Instant.parse("2026-08-18T00:00:00Z");
     private static final String UID = "logicdevice_station.th";
     private static final String ATTR = "temperature";
-    private static final String TYPE = "1";
+    private static final String TYPE = "room_temp_abnormal";
 
     @Mock
     private AsmAlarmRecordMapper mapper;

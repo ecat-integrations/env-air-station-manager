@@ -1,7 +1,6 @@
 package com.ecat.integration.EnvAirStationManagerIntegration.service;
 
 import com.ecat.core.State.AttributeBase;
-import com.ecat.core.State.NumberAttribute;
 import com.ecat.core.State.UnitInfo;
 import com.ecat.core.Utils.Log;
 import com.ecat.core.Utils.LogFactory;
@@ -11,6 +10,7 @@ import com.ecat.integration.EnvAirStationManagerIntegration.mapper.AsmConfigStat
 import com.ecat.integration.EnvAirStationManagerIntegration.mapper.AsmConfigUnitMapper;
 import com.ecat.integration.EnvAirStationManagerIntegration.support.AsmGranularityMask;
 import com.ecat.integration.EnvAirStationManagerIntegration.support.AsmMaterializationMode;
+import com.ecat.integration.EnvAirStationManagerIntegration.support.AsmStatSeriesKindClassifier;
 import com.ecat.integration.EnvAirStationManagerIntegration.support.AsmUnitPurpose;
 import com.ecat.integration.logicdevice.LogicDevice.LogicDevice;
 import lombok.RequiredArgsConstructor;
@@ -31,9 +31,12 @@ import java.util.concurrent.ConcurrentHashMap;
  * <p><b>幂等</b>：DB 侧 ON CONFLICT DO NOTHING（已存在行——含人工配置/人工精化 unit——原样保留）；
  * 进程侧 seen set 去重（同 series 每 process 只发一次 insertIfAbsent，热路径零 DB）。</p>
  *
+ * <p><b>准入判据</b>：numeric attr（AVG）或统计白名单非数值 attr（ALARM/STATE，2026-09-08 用户裁定
+ * 放开）——判据收口在 {@link AsmStatSeriesKindClassifier#isSeedEligible}，与 consumer 首见路同源防漂移。</p>
+ *
  * <p><b>默认值</b>：config_stat(enabled=true, mask=全开, BOTH) + config_unit(STORAGE 与 STANDARD 双行, native unit)。
- * native unit 取 airstation attr 定义（{@link NumberAttribute#getNativeUnit()}，即 LogicAttributeDefine 注入值）；
- * 无单位写空串占位（行存在表达「已 seed」，读出口遇空串按显原生不换算）。</p>
+ * native unit 取 airstation attr 定义（{@link AttributeBase#getNativeUnit()}，即 LogicAttributeDefine 注入值）；
+ * 无单位写空串占位（行存在表达「已 seed」，读出口遇空串按显原生不换算；非数值 attr 恒空串=显无单位）。</p>
  *
  * <p><b>缓存失效</b>：直写 asm_config_unit 后必调 {@link AsmUnitContract#invalidate}（uid 级）——
  * 其负结果不终身缓存，seed 后下次解析即见新行。</p>
@@ -61,7 +64,8 @@ public class AsmSeedService {
 
     /**
      * 启动预 seed：枚举传入的 airstation 逻辑设备（调用方 P1b 经 LogicDeviceManager 取全集），
-     * 对每个 numeric attr 落默认配置行。非 airstation 设备（uid 前缀不符）跳过。
+     * 对每个统计准入 attr（numeric=AVG / 白名单非数值=ALARM、STATE）落默认配置行。
+     * 非 airstation 设备（uid 前缀不符）跳过。
      *
      * @param devices 启动时刻 registry 现存逻辑设备全集（ ASM 只滤站房，其余前缀不动）
      * @return 实际 seed 的 series 数（含 seen 去重后跳过的）
@@ -77,8 +81,8 @@ public class AsmSeedService {
                 continue;  // 非 airstation 站房设备（logicdevice.* 分析仪归 ADM），不碰
             }
             for (AttributeBase<?> attr : device.getAttrs().values()) {
-                if (!(attr instanceof NumberAttribute)) {
-                    continue;  // 站房开关/文本量不进聚合（avg-only 引擎只物化 numeric）
+                if (!AsmStatSeriesKindClassifier.isSeedEligible(attr)) {
+                    continue;  // 白名单外非数值不 seed（计算属性/共享状态/命令/事件快照等，默认不统计）
                 }
                 if (seedSeries(uid, attr.getAttributeID(), nativeUnitOf(attr))) {
                     count++;

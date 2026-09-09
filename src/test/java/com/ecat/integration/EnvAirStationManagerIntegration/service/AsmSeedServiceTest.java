@@ -3,6 +3,7 @@ package com.ecat.integration.EnvAirStationManagerIntegration.service;
 import com.ecat.core.State.AttributeBase;
 import com.ecat.core.State.AttributeClass;
 import com.ecat.core.State.NumberAttribute;
+import com.ecat.core.State.TextAttribute;
 import com.ecat.core.State.Unit.TemperatureUnit;
 import com.ecat.core.State.UnitInfo;
 import com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmConfigStat;
@@ -34,8 +35,8 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
- * AsmSeedService 单测——启动枚举过滤（airstation 前缀 / numeric attr）/ insertIfAbsent 默认值 /
- * 进程内 seen 幂等 / 直写后缓存失效。
+ * AsmSeedService 单测——启动枚举过滤（airstation 前缀 / 统计准入=numeric 或白名单非数值）/
+ * insertIfAbsent 默认值 / 进程内 seen 幂等 / 直写后缓存失效。
  *
  * <p>LogicDevice 用 Mockito class-mock（Objenesis 绕过构造，只 stub getUniqueId/getAttrs 两个读取面）。
  * 无 sleep 全同步。</p>
@@ -65,8 +66,6 @@ class AsmSeedServiceTest {
     private LogicDevice stationDevice;
     @Mock
     private LogicDevice analyzerDevice;
-    @Mock
-    private AttributeBase<?> textAttr;
 
     private AsmSeedService service;
 
@@ -132,15 +131,40 @@ class AsmSeedServiceTest {
     void seedStartup_ignoresNonStationDevicesAndNonNumericAttrs() {
         when(analyzerDevice.getUniqueId()).thenReturn("logicdevice.so2");  // ADM 域分析仪
         when(stationDevice.getUniqueId()).thenReturn("logicdevice_station.th");
-        // 文本属性 mock：map key 手工给（getAttributeID 可能 final 不可 stub，且 seed 路径只按 map 迭代不读 id）
+        // 白名单外文本属性（真实 TextAttribute 实例——seed 判据读 getAttributeID，mock 默认返 null 会误抛）
         Map<String, AttributeBase<?>> textOnly = new LinkedHashMap<>();
-        textOnly.put("status_text", textAttr);
+        textOnly.put("status_text", new TextAttribute("status_text", AttributeClass.VALUE, null, null, false));
         when(stationDevice.getAttrs()).thenReturn(textOnly);
 
         int count = service.seedStartup(Arrays.asList(analyzerDevice, stationDevice));
 
-        assertEquals(0, count, "非站房设备跳过 + 非 numeric attr 跳过");
+        assertEquals(0, count, "非站房设备跳过 + 白名单外非数值 attr 跳过");
         verifyNoInteractions(configStatMapper, configUnitMapper, unitContract);
+    }
+
+    @Test
+    void seedStartup_whitelistedTextAttr_seedsConfigRowsWithEmptyUnit() {
+        // 统计白名单放开（2026-09-08 裁定）：ALARM/STATE 文本 series 与 numeric 同样落默认配置行
+        TextAttribute waterLeak = new TextAttribute("water_leak", AttributeClass.VALUE, null, null, false);
+        when(stationDevice.getUniqueId()).thenReturn("logicdevice_station.security_alarm");
+        when(stationDevice.getAttrs()).thenReturn(attrs(waterLeak));
+
+        int count = service.seedStartup(Arrays.asList(stationDevice));
+
+        assertEquals(1, count);
+        ArgumentCaptor<AsmConfigStat> statCap = ArgumentCaptor.forClass(AsmConfigStat.class);
+        verify(configStatMapper).insertIfAbsent(statCap.capture());
+        assertEquals("water_leak", statCap.getValue().getAttrId());
+        assertEquals(Boolean.TRUE, statCap.getValue().getEnabled(), "非数值 series 同样默认开三粒度 BOTH");
+        assertEquals(Integer.valueOf(7), statCap.getValue().getGranularityMask());
+        assertEquals("BOTH", statCap.getValue().getMaterializationMode());
+
+        ArgumentCaptor<AsmConfigUnit> unitCap = ArgumentCaptor.forClass(AsmConfigUnit.class);
+        verify(configUnitMapper, times(2)).insertIfAbsent(unitCap.capture());
+        assertEquals("", unitCap.getAllValues().get(0).getUnit(),
+                "非数值 attr 无 nativeUnit → 空串占位（显无单位）");
+        assertEquals("", unitCap.getAllValues().get(1).getUnit(), "STANDARD 行同空串占位");
+        verify(unitContract).invalidate("logicdevice_station.security_alarm", "water_leak");
     }
 
     @Test

@@ -10,7 +10,7 @@ import com.ecat.core.Device.DeviceRegistry;
 import com.ecat.core.State.AttributeBase;
 import com.ecat.integration.EnvAirStationManagerIntegration.api.AirStationSdk;
 import com.ecat.integration.EnvAirStationManagerIntegration.api.AsmParamKey;
-import com.ecat.integration.EnvAirStationManagerIntegration.api.SdkAlarmRecord;
+import com.ecat.integration.EnvAirStationManagerIntegration.api.SdkAlarmEntry;
 import com.ecat.integration.EnvAirStationManagerIntegration.api.SdkControlResult;
 import com.ecat.integration.EnvAirStationManagerIntegration.api.SdkParamMeta;
 import com.ecat.integration.EnvAirStationManagerIntegration.api.SdkSnapshotAttr;
@@ -61,7 +61,8 @@ import static org.mockito.Mockito.when;
  * SDK 组装路径测试（mock mapper/服务，验证 DTO 行组装与降级口径，不碰 DB/运行环境）。
  *
  * <p>覆盖 queryStat 行组装 / listStatParams displayName 降级（registry 命中与未命中）/
- * querySnapshot 委派映射 / queryAlarmRecords 行映射 / hour 窗口超限 / control null 枚举降 null。</p>
+ * querySnapshot 委派映射 / queryAlarmEntries 行映射（label 双字段经真实 label 服务解析）/
+ * hour 窗口超限 / control null 枚举降 null。</p>
  *
  * <p>listStatParams 的 displayName 需 live attrs：经真实事件链注册 LogicDevice
  * （registry + BusRegistry DEVICE_LIFECYCLE，与生产同路径），测试后 reset 单例防串扰。</p>
@@ -91,8 +92,10 @@ class AirStationSdkAssemblyTest {
 
     @BeforeEach
     void setUp() {
+        // label 服务走生产构造（registry 扫描）：报警条目 label 双字段复用 REST 同一解析源；
+        // 未注册设备时扫描自然落空，不影响其余 mock 路径用例
         sdk = new AirStationSdkImpl(historyMapper, unitContract, snapshotService,
-                alarmRecordMapper, controlService);
+                alarmRecordMapper, new AsmDeviceLabelService(), controlService);
     }
 
     @AfterEach
@@ -168,6 +171,28 @@ class AirStationSdkAssemblyTest {
                 START, START.plusSeconds(401L * 24 * 3600)));
     }
 
+    @Test
+    void queryStat_nonNumericBucket_mapsValueTextWithNullValue() {
+        // 非数值桶（ALARM/STATE series，avgValue null + valueText 非空）：value 不再是空壳行——
+        // valueText 原样透传、value=null、unit=seed 空串占位（显无单位），与 listStatParams 目录契约闭合
+        AsmHistoryBucket r = AsmHistoryBucket.builder()
+                .logicDeviceUniqueId(UID).attrId("water_leak")
+                .dataTime(START).valueText("alarm").validCount(3L).totalCount(4L).build();
+        when(historyMapper.selectStatRows(eq("asm_stat_hour"), eq(START), eq(END),
+                eq(Collections.singletonList(AsmHistoryParamKey.of(UID, "water_leak"))),
+                eq(AsmIntervalMode.BACK.code()), eq(0), eq(0)))
+                .thenReturn(Collections.singletonList(r));
+        when(unitContract.resolveUnit(AsmUnitPurpose.STORAGE, UID, "water_leak")).thenReturn("");
+
+        List<SdkStatRow> out = sdk.queryStat(Collections.singletonList(key(UID, "water_leak")),
+                AsmStatGranularity.HOUR, AsmIntervalMode.BACK, START, END);
+
+        assertEquals(1, out.size());
+        assertEquals("alarm", out.get(0).getValueText(), "非数值统计值原样透传");
+        assertNull(out.get(0).getValue(), "非数值桶无均值");
+        assertEquals("", out.get(0).getUnit(), "空串占位=显无单位");
+    }
+
     // ========== listStatParams ==========
 
     /** 注册带 displayName live attr 的逻辑设备（registry+bus 真实事件链）。 */
@@ -185,8 +210,14 @@ class AirStationSdkAssemblyTest {
         Map<String, Object> data = new HashMap<>();
         data.put("name", "asm-station");
         entry.setData(data);
+        // attrDefs 是 alarm 条目 attrLabel 的解析源（displayName 唯一来源，同生产 LogicDevice 形态）；
+        // listStatParams 的 displayName 走 live attrs（device.setAttribute 注入），两路互不影响
+        LogicAttributeDefine voltageDef = new LogicAttributeDefine();
+        voltageDef.setAttrId("voltage");
+        voltageDef.setDisplayName("供电电压");
+        List<LogicAttributeDefine> defs = Collections.singletonList(voltageDef);
         LogicDevice device = new LogicDevice(entry) {
-            @Override public List<LogicAttributeDefine> getAttrDefs() { return Collections.emptyList(); }
+            @Override public List<LogicAttributeDefine> getAttrDefs() { return defs; }
             @Override protected String getMappingType() { return "TEST-ASM"; }
             @Override public void start() {}
             @Override public void stop() {}
@@ -195,10 +226,11 @@ class AirStationSdkAssemblyTest {
         };
         device.load(com.ecat.core.EcatCore.getInstance());
         device.init();
-        // Mockito mock（AttributeBase 非 final）：实现只读 getDisplayName，其余走默认
+        // Mockito mock（AttributeBase 非 final）：实现只读 getDisplayName，其余走默认。
+        // lenient：displayName 只被 listStatParams（live attrs）路径消费，alarm 条目走 attrDefs 不读它
         AttributeBase<?> voltageAttr = org.mockito.Mockito.mock(AttributeBase.class);
-        org.mockito.Mockito.when(voltageAttr.getAttributeID()).thenReturn("voltage");
-        org.mockito.Mockito.when(voltageAttr.getDisplayName()).thenReturn("供电电压");
+        org.mockito.Mockito.lenient().when(voltageAttr.getAttributeID()).thenReturn("voltage");
+        org.mockito.Mockito.lenient().when(voltageAttr.getDisplayName()).thenReturn("供电电压");
         device.setAttribute(voltageAttr);
         registry.register(device.getId(), device);
         busRegistry.publish(BusEvent.of(
@@ -287,38 +319,46 @@ class AirStationSdkAssemblyTest {
         assertEquals("RAW", b.getSource());
     }
 
-    // ========== queryAlarmRecords ==========
+    // ========== queryAlarmEntries ==========
 
     @Test
-    void queryAlarmRecords_emptyAndMultiRows_mapping() {
-        when(alarmRecordMapper.selectList(null, null, START, END, 100)).thenReturn(Collections.emptyList());
-        assertTrue(sdk.queryAlarmRecords(null, START, END, 100).isEmpty());
-
+    void queryAlarmEntries_multiRows_dualLabelAndDurationDiscipline() {
+        // label 双字段复用 AsmDeviceLabelService（REST 出口同源）：th=真槽（静态槽中文名）但设备未注册
+        // （attr label null）；UID=注册设备（attr displayName 经 registry 解析）但非槽（device label null）
+        registerStationDevice();
         Instant s1 = Instant.parse("2026-08-18T00:10:00Z");
         Instant e1 = Instant.parse("2026-08-18T00:25:00Z");
-        when(alarmRecordMapper.selectList(UID, null, START, END, 50)).thenReturn(Arrays.asList(
+        when(alarmRecordMapper.selectEntriesByType("room_temp_abnormal", START, END, 50)).thenReturn(Arrays.asList(
                 AsmAlarmRecord.builder()
-                        .alarmType("LIMIT").ruleName("电压上限").logicDeviceUniqueId(UID)
-                        .attrId("voltage").severity("HIGH").startTime(s1).endTime(e1)
-                        .description("超上限").status("FIRING").resultContent("220.5>220").build(),
+                        .alarmType("room_temp_abnormal").ruleName("设备间温度异常")
+                        .logicDeviceUniqueId("logicdevice_station.th")
+                        .attrId("temperature").severity("0").startTime(s1).endTime(e1)
+                        .description("超上限").status("INACTIVE").resultContent("29>28").build(),
                 AsmAlarmRecord.builder()
-                        .alarmType("STEADY").ruleName("恒值").logicDeviceUniqueId(UID)
-                        .attrId("current").severity("LOW").startTime(s1).endTime(null)
-                        .description("恒值").status("PENDING").resultContent("").build()));
+                        .alarmType("supply_voltage_abnormal").ruleName("供电电源异常波动")
+                        .logicDeviceUniqueId(UID)
+                        .attrId("voltage").severity("1").startTime(s1).endTime(null)
+                        .description("持续中").status("ACTIVE").build()));
 
-        List<SdkAlarmRecord> out = sdk.queryAlarmRecords(UID, START, END, 50);
+        List<SdkAlarmEntry> out = sdk.queryAlarmEntries("room_temp_abnormal", START, END, 50);
         assertEquals(2, out.size());
-        SdkAlarmRecord a = out.get(0);
-        assertEquals("LIMIT", a.getAlarmType());
-        assertEquals("电压上限", a.getRuleName());
-        assertEquals(UID, a.getLogicDeviceUniqueId());
-        assertEquals("voltage", a.getAttrId());
-        assertEquals("HIGH", a.getSeverity());
-        assertEquals(s1, a.getStartTime());
-        assertEquals(e1, a.getEndTime());
-        assertEquals("FIRING", a.getStatus());
-        assertEquals("220.5>220", a.getResultContent());
-        assertNull(out.get(1).getEndTime());
+        SdkAlarmEntry a = out.get(0);
+        assertEquals("room_temp_abnormal", a.getAlarmType());
+        assertEquals("设备间温度异常", a.getRuleName());
+        assertEquals("logicdevice_station.th", a.getLogicDeviceUniqueId());
+        assertEquals("站房温湿度监测仪", a.getDeviceLabel(), "真槽静态解析");
+        assertEquals("temperature", a.getAttrId());
+        assertNull(a.getAttrLabel(), "设备未注册 → attr label=null（回退归消费方）");
+        assertEquals(s1, a.getTriggerTime());
+        assertEquals(e1, a.getRecoverTime());
+        assertEquals(Long.valueOf(15L * 60 * 1000), a.getDurationMs());
+        assertEquals("INACTIVE", a.getStatus());
+        SdkAlarmEntry b = out.get(1);
+        assertEquals("supply_voltage_abnormal", b.getAlarmType());
+        assertNull(b.getDeviceLabel(), "非槽 uid → null");
+        assertEquals("供电电压", b.getAttrLabel(), "注册设备 attr displayName");
+        assertNull(b.getRecoverTime(), "持续中行 recoverTime=null");
+        assertNull(b.getDurationMs(), "持续中行不虚构时长");
     }
 
     // ========== control（null 枚举降 null 分支）==========

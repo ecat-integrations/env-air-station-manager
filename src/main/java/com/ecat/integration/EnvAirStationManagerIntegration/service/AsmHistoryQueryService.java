@@ -44,6 +44,9 @@ public class AsmHistoryQueryService {
     /** unit 缺省（custom=应用 HISTORY 偏好）。 */
     static final String DEFAULT_UNIT = "custom";
 
+    /** order 缺省（ASC=SDK 机对机「旧→新」口径；DESC 仅历史页网格分页展示用）。 */
+    static final String DEFAULT_ORDER = "ASC";
+
     private static final int DEFAULT_PAGE_NUM = 1;
     private static final int DEFAULT_PAGE_SIZE = 50;
 
@@ -62,6 +65,7 @@ public class AsmHistoryQueryService {
         AsmStatGranularity granularity = parseGranularity(query.getGranularity());
         AsmIntervalMode mode = parseMode(query.getMode());
         boolean applyPref = parseUnit(query.getUnit());
+        boolean desc = parseDesc(query.getOrder());
         validateWindow(granularity, query.getStart(), query.getEnd());
         int pageNum = defaultPage(query.getPageNum(), 1, "pageNum");
         int pageSize = defaultPage(query.getPageSize(), DEFAULT_PAGE_SIZE, "pageSize");
@@ -72,14 +76,23 @@ public class AsmHistoryQueryService {
             return AsmHistoryResult.builder()
                     .granularity(granularity.name()).mode(mode.name())
                     .unit(query.getUnit() != null ? query.getUnit() : DEFAULT_UNIT)
-                    .pageNum(pageNum).pageSize(pageSize)
+                    .pageNum(pageNum).pageSize(pageSize).total(0L)
                     .rows(Collections.<AsmHistoryResult.Row>emptyList())
                     .build();
         }
 
-        List<AsmHistoryBucket> buckets = historyMapper.selectStatRows(
+        // 行集方向按 order 分流到两条独立语句（SDK 升序语句零改动）；过滤/分页参数两条语句完全同构
+        List<AsmHistoryBucket> buckets = desc
+                ? historyMapper.selectStatRowsDesc(
+                        granularity.targetTable(), query.getStart(), query.getEnd(),
+                        params, mode.code(), pageSize, (pageNum - 1) * pageSize)
+                : historyMapper.selectStatRows(
+                        granularity.targetTable(), query.getStart(), query.getEnd(),
+                        params, mode.code(), pageSize, (pageNum - 1) * pageSize);
+        // total 与行集同 WHERE（mapper 同一 <include> 片段）：前端真分页依据，替代「下一页探测」
+        long total = historyMapper.countStatRows(
                 granularity.targetTable(), query.getStart(), query.getEnd(),
-                params, mode.code(), pageSize, (pageNum - 1) * pageSize);
+                params, mode.code());
 
         List<AsmHistoryResult.Row> rows = new ArrayList<>(buckets != null ? buckets.size() : 0);
         if (buckets != null) {
@@ -90,7 +103,7 @@ public class AsmHistoryQueryService {
         return AsmHistoryResult.builder()
                 .granularity(granularity.name()).mode(mode.name())
                 .unit(query.getUnit() != null ? query.getUnit() : DEFAULT_UNIT)
-                .pageNum(pageNum).pageSize(pageSize)
+                .pageNum(pageNum).pageSize(pageSize).total(total)
                 .rows(rows)
                 .build();
     }
@@ -99,6 +112,8 @@ public class AsmHistoryQueryService {
      * 桶行 → 结果行（unit=custom 时经 HISTORY 读出口换算，源=STORAGE 行 unit）。
      * display_unit 在换算完成的出口处取 {@code display.getUnit()}（=value 实际单位，custom 换算后
      * 可能≠storageUnit；standard 未换算路径=storageUnit 同源）转 UnitInfo.getDisplayName 显示串。
+     * 非数值桶（avgValue=null、valueText 非空）：value 恒 null 直通（resolveDisplay 对 null 值
+     * 原样返），valueText 原样透传；unit=seed 空串占位（非数值 attr 无 nativeUnit）=显无单位。
      */
     private AsmHistoryResult.Row toRow(AsmHistoryBucket bucket, boolean applyPref) {
         String storageUnit = unitContract.resolveUnit(
@@ -113,6 +128,7 @@ public class AsmHistoryQueryService {
                 .logicDeviceUniqueId(bucket.getLogicDeviceUniqueId())
                 .attrId(bucket.getAttrId())
                 .value(display.getValue())
+                .valueText(bucket.getValueText())
                 .unit(display.getUnit())
                 .displayUnit(AsmUnitContract.unitDisplayName(display.getUnit()))
                 .validCount(bucket.getValidCount())
@@ -147,6 +163,21 @@ public class AsmHistoryQueryService {
             return false;
         }
         throw new IllegalArgumentException("非法 unit: " + unit + "（合法: standard/custom）");
+    }
+
+    /** order 解析：null/空→缺省 ASC；ASC/DESC 之外的值抛（严格模式不猜）。 */
+    private static boolean parseDesc(String order) {
+        String o = order != null ? order.trim() : DEFAULT_ORDER;
+        if (o.isEmpty()) {
+            return false;
+        }
+        if (DEFAULT_ORDER.equals(o)) {
+            return false;
+        }
+        if ("DESC".equals(o)) {
+            return true;
+        }
+        throw new IllegalArgumentException("非法 order: " + order + "（合法: ASC/DESC）");
     }
 
     private static void validateWindow(AsmStatGranularity granularity, Instant start, Instant end) {

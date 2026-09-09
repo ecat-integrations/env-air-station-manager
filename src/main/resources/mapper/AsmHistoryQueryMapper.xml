@@ -13,27 +13,19 @@
         <result property="logicDeviceUniqueId" column="logic_device_unique_id"/>
         <result property="attrId"             column="attr_id"/>
         <result property="avgValue"           column="avg_value"/>
+        <result property="valueText"          column="value_text"/>
         <result property="validCount"         column="valid_count"/>
         <result property="totalCount"         column="total_count"/>
     </resultMap>
 
     <!--
-        单条 tuple IN-list batch 查询（ONE round-trip 取全参数，禁逐参数 N+1）。
-        ${table} = service 按 AsmStatGranularity.targetTable() 映射的固定白名单表名（asm_stat_minute/_5min/_hour），
-        非用户输入，${} 原样拼入无注入面。
+        行集与计数共用的过滤段（单一定义点）：count 与 rows 同 WHERE 由 <include> 复用同一片段保证，
+        两语句各写一份必然漂移（改了行集过滤忘改计数=total 与行集口径不一致）。
         interval_mode = #{modeCode} 是防串台唯一闸：PK 含 interval_mode，多 mode 并存下同 data_time
         BACK/FRONT 各自独立一行，不过滤会串台（ADM 教训平移）。
-        窗口 [start,end) 前闭后开（历史页与 SDK 同口径）；ORDER BY data_time ASC 旧→新时间序列。
-        LIMIT/OFFSET 分页：limit<=0 时不限（SDK 全窗路径，窗口上限由 service 校验卡死无深 OFFSET）。
+        窗口 [start,end) 前闭后开（历史页与 SDK 同口径）。
     -->
-    <select id="selectStatRows" resultMap="AsmHistoryBucketResult">
-        SELECT data_time,
-               logic_device_unique_id,
-               attr_id,
-               avg_value,
-               valid_count,
-               total_count
-        FROM ${table}
+    <sql id="statRowsWhere">
         WHERE data_time &gt;= #{start}
           AND data_time &lt; #{end}
           AND interval_mode = #{modeCode}
@@ -41,10 +33,62 @@
           <foreach collection="seriesList" item="s" open="(" separator="," close=")">
             (#{s.logicDeviceUniqueId}, #{s.attrId})
           </foreach>
+    </sql>
+
+    <!--
+        单条 tuple IN-list batch 查询（ONE round-trip 取全参数，禁逐参数 N+1）。
+        ${table} = service 按 AsmStatGranularity.targetTable() 映射的固定白名单表名（asm_stat_minute/_5min/_hour），
+        非用户输入，${} 原样拼入无注入面。
+        ORDER BY data_time ASC 旧→新时间序列。
+        LIMIT/OFFSET 分页：limit<=0 时不限（SDK 全窗路径，窗口上限由 service 校验卡死无深 OFFSET）。
+    -->
+    <select id="selectStatRows" resultMap="AsmHistoryBucketResult">
+        SELECT data_time,
+               logic_device_unique_id,
+               attr_id,
+               avg_value,
+               value_text,
+               valid_count,
+               total_count
+        FROM ${table}
+        <include refid="statRowsWhere"/>
         ORDER BY data_time ASC, logic_device_unique_id, attr_id
         <if test="limit &gt; 0">
             LIMIT #{limit} OFFSET #{offset}
         </if>
+    </select>
+
+    <!--
+        降序版（历史页网格分页专用）：投影/过滤段/分页与 selectStatRows 同构（同一 <include> 过滤段），
+        仅 ORDER BY 翻为 DESC——独立语句而非升序语句加 order 分支，SDK queryStat 依赖的升序语句
+        零改动（机对机「旧→新」序列是 SDK javadoc 契约，语句形状回退即静默破坏契约）。
+        历史页展示口径统一「最新在前」（页序/页内/表格/导出同向），DB 侧排序免去前端整页反转。
+    -->
+    <select id="selectStatRowsDesc" resultMap="AsmHistoryBucketResult">
+        SELECT data_time,
+               logic_device_unique_id,
+               attr_id,
+               avg_value,
+               value_text,
+               valid_count,
+               total_count
+        FROM ${table}
+        <include refid="statRowsWhere"/>
+        ORDER BY data_time DESC, logic_device_unique_id, attr_id
+        <if test="limit &gt; 0">
+            LIMIT #{limit} OFFSET #{offset}
+        </if>
+    </select>
+
+    <!--
+        分页 total 计数（历史页真分页）：与 selectStatRows 同 WHERE（同一 <include> 片段）去 LIMIT/ORDER——
+        无 total 时前端只能「下一页探测」逐页翻且无总数（分钟粒度 1 天 1440 行只见首页 ~3.3h）。
+        COUNT(*) 恒单行非 null，resultType=long 直绑；无 ORDER BY（计数无序，免排序开销）。
+    -->
+    <select id="countStatRows" resultType="long">
+        SELECT COUNT(*)
+        FROM ${table}
+        <include refid="statRowsWhere"/>
     </select>
 
     <!--

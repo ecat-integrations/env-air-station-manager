@@ -21,10 +21,12 @@ export function getSnapshot(unit) {
 /**
  * 历史数据查询（GET /asm-monitor/history）。
  * @param {object} q { granularity:'MINUTE'|'FIVE_MIN'|'HOUR', start, end,
- *   params:'uid:attrId,...', mode:'BACK'|'FRONT', unit:'standard'|'custom', pageNum, pageSize }
+ *   params:'uid:attrId,...', mode:'BACK'|'FRONT', unit:'standard'|'custom', pageNum, pageSize, order }
  *   start/end = ISO-8601 LocalDateTime 壁钟串（datetime-local 原样提交，后端按 core JVM 壁钟转 UTC）。
- * @returns {Promise} res.data = { granularity, mode, unit, pageNum, pageSize,
- *   rows:[{dataTime, logicDeviceUniqueId, attrId, value, unit, validCount, totalCount}] }
+ *   order = 'ASC'|'DESC'（缺省 ASC；历史页网格分页传 DESC=「最新在前」）。
+ * @returns {Promise} res.data = { granularity, mode, unit, pageNum, pageSize, total,
+ *   rows:[{dataTime, logicDeviceUniqueId, attrId, value, value_text, unit, validCount, totalCount}] }
+ *   total = 窗口内桶行计数（count 字段保留）；历史页分页依据已改为前端窗口网格 tick 数，不再读它。
  */
 export function queryHistory(q) {
   return request({
@@ -39,6 +41,7 @@ export function queryHistory(q) {
       unit: q.unit,
       pageNum: q.pageNum,
       pageSize: q.pageSize,
+      order: q.order,
     },
   })
 }

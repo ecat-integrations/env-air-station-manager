@@ -6,6 +6,7 @@ import com.ecat.core.State.AttributeBase;
 import com.ecat.core.State.AttributeClass;
 import com.ecat.core.State.AttrState;
 import com.ecat.core.State.NumberAttribute;
+import com.ecat.core.State.TextAttribute;
 import com.ecat.core.State.Unit.TemperatureUnit;
 import com.ecat.core.State.UnitInfo;
 import com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmDataSample;
@@ -36,7 +37,8 @@ import static org.mockito.Mockito.when;
 
 /**
  * ASM raw 落库 consumer 单测——同包直接调 flush(List)（手动批触发，无 sleep，worker 线程不参与）：
- * airstation 过滤（uid 前缀）/ 数值文本分槽 / 首见 numeric series 触发 seed（二次 flush 不重复）/ 空批不调 mapper。
+ * airstation 过滤（uid 前缀）/ 数值文本分槽 / 首见统计准入 series（numeric 或白名单文本）触发 seed
+ * （二次 flush 不重复）/ 空批不调 mapper。
  */
 @ExtendWith(MockitoExtension.class)
 class AsmDataSampleConsumerTest {
@@ -157,7 +159,7 @@ class AsmDataSampleConsumerTest {
     @Test
     void flush_stringValueGoesValueTextSlot() {
         when(stationDevice.getAttrs()).thenReturn(attrs(
-                new TestNumAttr("temperature", TemperatureUnit.CELSIUS)));  // status_text 非 numeric attr
+                new TestNumAttr("temperature", TemperatureUnit.CELSIUS)));  // status_text 白名单外文本 attr
         DeviceDataChangedEvent evt = event("station-dev", "status_text", "RUNNING", null);
 
         consumer.flush(Collections.singletonList(evt));
@@ -167,8 +169,23 @@ class AsmDataSampleConsumerTest {
         AsmDataSample s = cap.getValue().get(0);
         assertEquals("RUNNING", s.getValueText());
         assertEquals(null, s.getValueNum());
-        // 非 numeric attr 不 seed（avg-only 引擎只物化 numeric，与 AsmSeedService.seedStartup 同口径）
+        // 白名单外文本 attr 不 seed（判据与 AsmSeedService.seedStartup 同源）
         verify(seedService, never()).seedSeries(org.mockito.ArgumentMatchers.anyString(),
                 org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyString());
+    }
+
+    @Test
+    void flush_whitelistedTextSeries_seedsFirstSeenWithEmptyUnit() {
+        // 统计白名单放开（2026-09-08 裁定）：ALARM 文本 series 首见也触发 seed（nativeUnit 空=显无单位）
+        when(stationDevice.getAttrs()).thenReturn(attrs(
+                new TextAttribute("water_leak", AttributeClass.VALUE, null, null, false)));
+
+        consumer.flush(Collections.singletonList(event("station-dev", "water_leak", "alarm", null)));
+
+        ArgumentCaptor<List<AsmDataSample>> cap = ArgumentCaptor.forClass((Class<List<AsmDataSample>>) (Class<?>) List.class);
+        verify(sampleMapper).batchInsert(cap.capture());
+        assertEquals("alarm", cap.getValue().get(0).getValueText(), "报警文本照常落 raw value_text 槽");
+        assertEquals(null, cap.getValue().get(0).getValueNum());
+        verify(seedService).seedSeries("logicdevice_station.th", "water_leak", "");
     }
 }

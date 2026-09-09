@@ -49,8 +49,8 @@ class AsmAlarmRuleIndexTest {
     @Test
     void compositeKey_noStringConcatenationCollision() {
         // 字符串拼接下 "a.b"+"c" 与 "a"+"b.c" 同 key；嵌套 Map 必须分开
-        AsmAlarmRule r1 = row("1", "0", content("a.b", "c"));
-        AsmAlarmRule r2 = row("2", "0", content("a", "b.c"));
+        AsmAlarmRule r1 = row("room_temp_abnormal", "0", content("a.b", "c"));
+        AsmAlarmRule r2 = row("room_humidity_abnormal", "0", content("a", "b.c"));
         when(ruleMapper.selectAll()).thenReturn(Arrays.asList(r1, r2));
         index.reload();
 
@@ -58,15 +58,15 @@ class AsmAlarmRuleIndexTest {
         List<AsmAlarmRuleDefinition> slot2 = index.getRules("a", "b.c");
         assertEquals(1, slot1.size());
         assertEquals(1, slot2.size());
-        assertEquals("1", slot1.get(0).getAlarmType());
-        assertEquals("2", slot2.get(0).getAlarmType());
+        assertEquals("room_temp_abnormal", slot1.get(0).getAlarmType());
+        assertEquals("room_humidity_abnormal", slot2.get(0).getAlarmType());
         assertTrue(index.getRules("a", "c").isEmpty());
     }
 
     @Test
     void badRuleIsolated_goodRulesStillIndexed() {
-        AsmAlarmRule bad = row("99", "0", "not-json");
-        AsmAlarmRule good = row("3", "0",
+        AsmAlarmRule bad = row("broken_rule", "0", "not-json");
+        AsmAlarmRule good = row("water_leak", "0",
                 "{\"name\":\"漏水\",\"enabled\":true,\"device_info\":{\"u\":[\"water_leak\"]}}");
         when(ruleMapper.selectAll()).thenReturn(Arrays.asList(bad, good));
         index.reload();
@@ -77,19 +77,19 @@ class AsmAlarmRuleIndexTest {
     @Test
     void hotReload_replacesIndexSnapshot() {
         when(ruleMapper.selectAll()).thenReturn(Collections.singletonList(
-                row("1", "0", "{\"name\":\"v1\",\"enabled\":true,\"device_info\":{\"u\":[\"a\"]}}")));
+                row("room_temp_abnormal", "0", "{\"name\":\"v1\",\"enabled\":true,\"device_info\":{\"u\":[\"a\"]}}")));
         index.reload();
         assertEquals("0", index.getRules("u", "a").get(0).getSeverity());
 
         when(ruleMapper.selectAll()).thenReturn(Collections.singletonList(
-                row("1", "2", "{\"name\":\"v1\",\"enabled\":true,\"device_info\":{\"u\":[\"a\"]}}")));
+                row("room_temp_abnormal", "2", "{\"name\":\"v1\",\"enabled\":true,\"device_info\":{\"u\":[\"a\"]}}")));
         index.reload();
         assertEquals("2", index.getRules("u", "a").get(0).getSeverity());
     }
 
     @Test
     void reloadWithAllBadRules_leavesIndexEmptyNotThrowing() {
-        when(ruleMapper.selectAll()).thenReturn(Collections.singletonList(row("1", "0", "{")));
+        when(ruleMapper.selectAll()).thenReturn(Collections.singletonList(row("room_temp_abnormal", "0", "{")));
         index.reload();
         assertTrue(index.getRules("u", "a").isEmpty());
         assertEquals(0, index.loadedRuleCount());
@@ -97,8 +97,8 @@ class AsmAlarmRuleIndexTest {
 
     @Test
     void multiRuleSameSlot_allIndexed() {
-        AsmAlarmRule a = row("1", "0", "{\"name\":\"r1\",\"enabled\":true,\"device_info\":{\"u\":[\"a\"]}}");
-        AsmAlarmRule b = row("1010", "1", "{\"name\":\"r2\",\"enabled\":true,\"device_info\":{\"u\":[\"a\"]}}");
+        AsmAlarmRule a = row("room_temp_abnormal", "0", "{\"name\":\"r1\",\"enabled\":true,\"device_info\":{\"u\":[\"a\"]}}");
+        AsmAlarmRule b = row("range_exceeded", "1", "{\"name\":\"r2\",\"enabled\":true,\"device_info\":{\"u\":[\"a\"]}}");
         when(ruleMapper.selectAll()).thenReturn(Arrays.asList(a, b));
         index.reload();
         assertEquals(2, index.getRules("u", "a").size());

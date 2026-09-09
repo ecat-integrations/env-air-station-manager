@@ -3,13 +3,15 @@
   "version": "1.0.0",
   "description": "Playwright E2E tests for ASM (env-air-station-manager) ruoyi 集成页面（黑盒验收 G 段）",
   "scripts": {
-    "test:asm-e2e": "playwright test",
+    "test:asm-e2e": "playwright test --project=ro --workers=4 && playwright test --project=real --workers=1",
     "test:asm-e2e:headed": "playwright test --headed",
-    "test:g1": "playwright test --grep @g1",
-    "test:g2": "playwright test --grep @g2",
-    "test:g3": "playwright test --grep @g3",
+    "test:g1": "playwright test --project=real --grep \"@g1\\b\"",
+    "test:g2": "playwright test --project=real --grep \"@g2\\b\"",
+    "test:g3": "playwright test --project=real --grep \"@g3\\b\"",
     "report": "playwright show-report",
-    "test:g4": "playwright test --grep @g4"
+    "test:g4": "playwright test --project=ro --grep \"@g4\\b\" --workers=4",
+    "test:g10": "playwright test --project=ro --grep \"@g10\\b\" --workers=4",
+    "test:g13": "playwright test --project=ro --grep \"@g13\\b\" --workers=4"
   },
   "devDependencies": {
     "@playwright/test": "^1.48.0",

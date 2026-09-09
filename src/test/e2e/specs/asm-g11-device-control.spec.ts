@@ -292,6 +292,9 @@ test('G11-7 门禁 stateless 待执行反馈：primary 实心 + 对勾角标，�
   const c = card(page, 'logicdevice_station.access_control');
   const grp = c.locator('[data-asm="stateless-door_control"]');
   await expect(grp.locator('.asmc-pending-check')).toHaveCount(0);
+  // 设计变更 2026-09-09 回归锁：离线不限制操作——门禁是事件驱动数据源，60s 无新值显「离线」属常态，
+  // 按钮必须可点（在线/离线仅 tag 展示）。无需任何数据前置，直接断言可点。
+  await expect(grp.locator('.el-button').first()).toBeEnabled();
   await grp.locator('.el-button').first().click();
   // 待执行选项：primary 实心（非 plain）+ 右下角对勾角标
   await expect(c.locator('[data-asm="ctl-confirm"]')).toBeVisible();

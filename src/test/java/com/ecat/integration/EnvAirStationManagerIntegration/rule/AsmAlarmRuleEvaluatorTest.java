@@ -127,13 +127,13 @@ class AsmAlarmRuleEvaluatorTest {
         // 同 uid 不同 attr 的两条规则各自独立去重（修复点1 复合 key 语义）
         index.install(java.util.Arrays.asList(
                 AsmAlarmRuleDefinition.parse(com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmAlarmRule.builder()
-                        .alarmType("1").severity("0").settingContent(
+                        .alarmType("room_temp_abnormal").severity("0").settingContent(
                                 "{\"name\":\"t1\",\"enabled\":true,\"configurable\":true,"
                                 + "\"device_info\":{\"logicdevice_station.th\":[\"temperature\"]},"
                                 + "\"configs\":[{\"type\":\"number\",\"class\":\"temperature\",\"value\":28}]}")
                         .build()),
                 AsmAlarmRuleDefinition.parse(com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmAlarmRule.builder()
-                        .alarmType("1010").severity("0").settingContent(
+                        .alarmType("range_exceeded").severity("0").settingContent(
                                 "{\"name\":\"t2\",\"enabled\":true,\"configurable\":true,"
                                 + "\"device_info\":{\"logicdevice_station.th\":[\"humidity\"]},"
                                 + "\"configs\":[{\"type\":\"number\",\"class\":\"humidity\",\"value\":70}]}")
@@ -220,9 +220,9 @@ class AsmAlarmRuleEvaluatorTest {
         // 同 series 两条规则：r1 数值规则遇非数值 displayValue（运行时错误跳过）；r2 状态串规则照常评估命中
         index.install(java.util.Arrays.asList(
                 AsmAlarmRuleDefinition.parse(com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmAlarmRule.builder()
-                        .alarmType("1").severity("1").settingContent(RANGE_JSON).build()),
+                        .alarmType("room_temp_abnormal").severity("1").settingContent(RANGE_JSON).build()),
                 AsmAlarmRuleDefinition.parse(com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmAlarmRule.builder()
-                        .alarmType("22").severity("2").settingContent(
+                        .alarmType("access_control_abnormal").severity("2").settingContent(
                                 "{\"name\":\"门禁\",\"enabled\":true,"
                                 + "\"device_info\":{\"logicdevice_station.th\":[\"temperature\"]},"
                                 + "\"configs\":[{\"type\":\"status\",\"value\":[\"abc\"],\"match\":\"equals\"}]}")
@@ -230,7 +230,7 @@ class AsmAlarmRuleEvaluatorTest {
         clock.set(T0);
         List<AsmAlarmRecord> fired = evaluator.evaluate(UID, "temperature", "abc", T0);
         assertEquals(1, fired.size());                             // 坏规则跳过，好规则照常
-        assertEquals("22", fired.get(0).getAlarmType());
+        assertEquals("access_control_abnormal", fired.get(0).getAlarmType());
     }
 
     @Test

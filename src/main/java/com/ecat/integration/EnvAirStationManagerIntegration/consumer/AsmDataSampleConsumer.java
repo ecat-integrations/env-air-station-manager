@@ -6,11 +6,11 @@ import com.ecat.core.Device.DeviceBase;
 import com.ecat.core.Device.DeviceRegistry;
 import com.ecat.core.State.AttrState;
 import com.ecat.core.State.AttributeBase;
-import com.ecat.core.State.NumberAttribute;
 import com.ecat.core.State.UnitInfo;
 import com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmDataSample;
 import com.ecat.integration.EnvAirStationManagerIntegration.mapper.AsmDataSampleMapper;
 import com.ecat.integration.EnvAirStationManagerIntegration.service.AsmSeedService;
+import com.ecat.integration.EnvAirStationManagerIntegration.support.AsmStatSeriesKindClassifier;
 import com.ecat.integration.logicdevice.LogicDevice.LogicDevice;
 
 import java.math.BigDecimal;
@@ -33,9 +33,10 @@ import java.util.concurrent.atomic.AtomicLong;
  * {@link #flush}（独占 worker 线程 + drop-oldest 反压）；整批全被过滤跳过不调 mapper（防 foreach 空
  * collection 非法 SQL）。flush 抛 RuntimeException 由基类兜转 {@link #onFlushError}（计数 + log，不杀线程）。</p>
  *
- * <p><b>首见 seed</b>：numeric attr 的 series 首次出现时调 {@link AsmSeedService#seedSeries}（本 consumer
- * 进程内 seen set 去重；非 numeric 不 seed——avg-only 引擎只物化 numeric，与 seedStartup 同口径）。
- * 启动后用户新建设备的配置行由本路自然补齐（seed 幂等，冲突让路人工配置）。</p>
+ * <p><b>首见 seed</b>：统计准入 attr（numeric=AVG / 白名单非数值=ALARM、STATE）的 series 首次出现时调
+ * {@link AsmSeedService#seedSeries}（本 consumer 进程内 seen set 去重；判据收口
+ * AsmStatSeriesKindClassifier#isSeedEligible，与 seedStartup 同源防漂移）。启动后用户新建设备的
+ * 配置行由本路自然补齐（seed 幂等，冲突让路人工配置）。</p>
  *
  * <p><b>值分槽</b>：Number → valueNum（BigDecimal.toString 保精度）、String → valueText、其他两 null
  * （严格模式不猜转换）。dataTime = state.lastUpdated（Instant 绝对时刻直存 timestamptz；null 抛——
@@ -89,10 +90,10 @@ public class AsmDataSampleConsumer extends AbstractBatchBusConsumer<DeviceDataCh
         sampleMapper.batchInsert(samples);
     }
 
-    /** 首见 numeric series 触发 seed（进程内 seen 去重；seedSeries 自身另有 DB 侧幂等）。 */
+    /** 首见统计准入 series 触发 seed（进程内 seen 去重；seedSeries 自身另有 DB 侧幂等）。 */
     private void seedIfFirstSeen(LogicDevice logic, String uid, String attrId) {
         AttributeBase<?> attr = logic.getAttrs().get(attrId);
-        if (!(attr instanceof NumberAttribute)) {
+        if (!AsmStatSeriesKindClassifier.isSeedEligible(attr)) {
             return;
         }
         String series = uid + ":" + attrId;

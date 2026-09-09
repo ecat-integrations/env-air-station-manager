@@ -6,6 +6,8 @@ import com.ecat.integration.EnvAirStationManagerIntegration.controller.dto.AsmHi
 import com.ecat.integration.EnvAirStationManagerIntegration.controller.dto.AsmHistoryQuery;
 import com.ecat.integration.EnvAirStationManagerIntegration.controller.dto.AsmHistoryResult;
 import com.ecat.integration.EnvAirStationManagerIntegration.mapper.AsmHistoryQueryMapper;
+import com.ecat.integration.EnvAirStationManagerIntegration.support.AsmIntervalMode;
+import com.ecat.integration.EnvAirStationManagerIntegration.support.AsmStatGranularity;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -25,7 +27,9 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -91,14 +95,80 @@ class AsmHistoryQueryServiceTest {
 
     @Test
     void emptyParamsMustReturnEmptyResult() {
-        assertEquals(0, service.query(baseQuery().params(Collections.emptyList()).build())
-                .getRows().size());
+        AsmHistoryResult result = service.query(baseQuery().params(Collections.emptyList()).build());
+        assertEquals(0, result.getRows().size());
+        assertEquals(0L, result.getTotal(), "空参数零查询：total 恒 0（不发起 count）");
+    }
+
+    @Test
+    void queryMustReturnTotalFromCountWithSameWindowAndMode() {
+        // 真分页 total：count 与行集同表/同窗/同 mode/同参数集（mapper 同一过滤段），service 只透传
+        AsmHistoryBucket bucket = AsmHistoryBucket.builder()
+                .dataTime(START).logicDeviceUniqueId("logicdevice_station.d").attrId("voltage")
+                .avgValue(220.0).validCount(5L).totalCount(6L)
+                .build();
+        when(historyMapper.selectStatRows(anyString(), any(Instant.class), any(Instant.class),
+                anyList(), anyInt(), anyInt(), anyInt()))
+                .thenReturn(Arrays.asList(bucket));
+        when(historyMapper.countStatRows(anyString(), any(Instant.class), any(Instant.class),
+                anyList(), anyInt()))
+                .thenReturn(1440L);
+        when(unitContract.resolveUnit(
+                eq(com.ecat.integration.EnvAirStationManagerIntegration.support.AsmUnitPurpose.STORAGE),
+                eq("logicdevice_station.d"), eq("voltage")))
+                .thenReturn(VoltageUnit.VOLT.getFullUnitString());
+
+        // unit=standard：只测 total 透传与 count 同参，不引入 HISTORY 换算 stub 噪声（换算另有专测）
+        AsmHistoryResult result = service.query(baseQuery().pageSize(200).unit("standard").build());
+
+        assertEquals(1440L, result.getTotal(), "total=count 出参透传（窗口桶行总数，非本页行数）");
+        assertEquals(1, result.getRows().size());
+        // count 与行集同参：同表 / 同窗 / 同参数集 / 同 mode（口径一致性由 mapper 同一过滤段保证）
+        verify(historyMapper).countStatRows(
+                eq(AsmStatGranularity.HOUR.targetTable()), eq(START), eq(END),
+                eq(Collections.singletonList(AsmHistoryParamKey.of("logicdevice_station.d", "voltage"))),
+                eq(AsmIntervalMode.BACK.code()));
     }
 
     @Test
     void invalidModeMustThrow() {
         assertThrows(IllegalArgumentException.class,
                 () -> service.query(baseQuery().mode("MIDDLE").build()));
+    }
+
+    @Test
+    void descOrderMustRouteToDescStatementAndAscMustKeepLegacyStatement() {
+        // order 分流两条独立语句：DESC=历史页网格分页「最新在前」；ASC/缺省=SDK 升序契约语句零扰动。
+        // 两条语句过滤/分页参数完全同构（同表/同窗/同参/同 mode/同分页），仅方向不同。
+        when(historyMapper.selectStatRowsDesc(anyString(), any(Instant.class), any(Instant.class),
+                anyList(), anyInt(), anyInt(), anyInt()))
+                .thenReturn(Collections.emptyList());
+        when(historyMapper.selectStatRows(anyString(), any(Instant.class), any(Instant.class),
+                anyList(), anyInt(), anyInt(), anyInt()))
+                .thenReturn(Collections.emptyList());
+
+        service.query(baseQuery().order("DESC").build());
+        verify(historyMapper).selectStatRowsDesc(
+                eq(AsmStatGranularity.HOUR.targetTable()), eq(START), eq(END), anyList(),
+                eq(AsmIntervalMode.BACK.code()), eq(50), eq(0));
+        verify(historyMapper, never()).selectStatRows(anyString(), any(Instant.class), any(Instant.class),
+                anyList(), anyInt(), anyInt(), anyInt());
+
+        service.query(baseQuery().order(null).build());
+        service.query(baseQuery().order("ASC").build());
+        // 缺省/显式 ASC 各走一次升序语句（SDK 同一入口），降序语句不再追加调用
+        verify(historyMapper, times(2)).selectStatRows(
+                anyString(), any(Instant.class), any(Instant.class), anyList(), anyInt(), anyInt(), anyInt());
+        verify(historyMapper, times(1)).selectStatRowsDesc(
+                anyString(), any(Instant.class), any(Instant.class), anyList(), anyInt(), anyInt(), anyInt());
+    }
+
+    @Test
+    void invalidOrderMustThrow() {
+        assertThrows(IllegalArgumentException.class,
+                () -> service.query(baseQuery().order("desc").build()));
+        assertThrows(IllegalArgumentException.class,
+                () -> service.query(baseQuery().order("RANDOM").build()));
     }
 
     @Test
@@ -179,5 +249,70 @@ class AsmHistoryQueryServiceTest {
         assertTrue(json.contains("\"unit\":\"VoltageUnit.VOLT\"") && json.contains("\"value\":220.0"),
                 "旧字段 JSON 键不得变：" + json);
         assertTrue(json.contains("\"display_unit\":\"V\""), "display_unit 须为 snake_case 键：" + json);
+    }
+
+    @Test
+    void historyResult_serializesTotalAlongsidePagingFields() throws Exception {
+        // 契约锁定：total 与 pageNum/pageSize/rows 同级（前端真分页读 total 算页数，缺级=退化探测）
+        AsmHistoryResult result = AsmHistoryResult.builder()
+                .granularity("HOUR").mode("BACK").unit("custom")
+                .pageNum(1).pageSize(200).total(1440L)
+                .rows(Collections.<AsmHistoryResult.Row>emptyList())
+                .build();
+        String json = new ObjectMapper().writeValueAsString(result);
+        assertTrue(json.contains("\"total\":1440") && json.contains("\"pageNum\":1") && json.contains("\"pageSize\":200"),
+                "total 须与分页字段同级同形：" + json);
+    }
+
+    @Test
+    void nonNumericBucketRowPassesValueTextThroughWithNullValue() {
+        // 非数值桶（avgValue null + valueText 非空）：value 恒 null（resolveDisplay 对 null 直通不抛）、
+        // valueText 原样透传、unit=storageUnit（seed 空串占位=显无单位）
+        AsmHistoryBucket bucket = AsmHistoryBucket.builder()
+                .dataTime(START).logicDeviceUniqueId("logicdevice_station.security_alarm").attrId("water_leak")
+                .valueText("alarm").validCount(3L).totalCount(4L)
+                .build();
+        when(historyMapper.selectStatRows(anyString(), any(Instant.class), any(Instant.class),
+                anyList(), anyInt(), anyInt(), anyInt()))
+                .thenReturn(Arrays.asList(bucket));
+        when(unitContract.resolveUnit(
+                eq(com.ecat.integration.EnvAirStationManagerIntegration.support.AsmUnitPurpose.STORAGE),
+                eq("logicdevice_station.security_alarm"), eq("water_leak")))
+                .thenReturn("");
+        // unit=custom 走 HISTORY 换算出口；真实现 value=null 直通返（此处 mock 复现同语义）
+        when(unitContract.resolveDisplay(
+                eq(com.ecat.integration.EnvAirStationManagerIntegration.support.AsmUnitPurpose.HISTORY),
+                eq("logicdevice_station.security_alarm"), eq("water_leak"), isNull(), eq("")))
+                .thenReturn(AsmDisplayValue.of(null, "", false));
+
+        AsmHistoryResult result = service.query(baseQuery().build());
+
+        assertEquals(1, result.getRows().size());
+        AsmHistoryResult.Row row = result.getRows().get(0);
+        assertEquals("alarm", row.getValueText(), "文本统计值原样透传（不换算）");
+        assertEquals(null, row.getValue(), "非数值桶无均值，value=null");
+        assertEquals("", row.getUnit(), "unit=seed 空串占位（显无单位）");
+        assertEquals(null, row.getDisplayUnit(), "空串单位无显示符号");
+    }
+
+    @Test
+    void numericBucketRowKeepsNullValueText() {
+        // 数值桶回归：valueText 恒 null（互斥不变式），value/unit 换算路径不变
+        AsmHistoryBucket bucket = AsmHistoryBucket.builder()
+                .dataTime(START).logicDeviceUniqueId("logicdevice_station.d").attrId("voltage")
+                .avgValue(220.0).validCount(5L).totalCount(6L)
+                .build();
+        when(historyMapper.selectStatRows(anyString(), any(Instant.class), any(Instant.class),
+                anyList(), anyInt(), anyInt(), anyInt()))
+                .thenReturn(Arrays.asList(bucket));
+        when(unitContract.resolveUnit(
+                eq(com.ecat.integration.EnvAirStationManagerIntegration.support.AsmUnitPurpose.STORAGE),
+                eq("logicdevice_station.d"), eq("voltage")))
+                .thenReturn(VoltageUnit.VOLT.getFullUnitString());
+
+        AsmHistoryResult result = service.query(baseQuery().unit("standard").build());
+
+        assertEquals(null, result.getRows().get(0).getValueText());
+        assertEquals(Double.valueOf(220.0), result.getRows().get(0).getValue());
     }
 }

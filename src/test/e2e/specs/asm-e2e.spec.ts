@@ -70,10 +70,12 @@ test.describe('ASM 黑盒验收 G 段', () => {
     await times.nth(0).fill(toLocalInput(new Date(now.getTime() - 30 * 60 * 1000)).replace('T', ' '));
     await times.nth(1).fill(toLocalInput(new Date(now.getTime() + 60 * 1000)).replace('T', ' '));
     // 参数选择（2026-09-08 v2：dialog 化）：readonly 触发框开 dialog → 勾参数 → 确定触发查询。
+    // 勾数值参数（设定温度）：非数值参数（报警/状态类）自 2026-09-09 起不出曲线（g10 套件专测），
+    // 本用例断言「出图出表」须锚定数值参数，非首参恰为门锁状态（非数值）不可再顺位取首。
     await page.locator('.asm-filter input[placeholder="选择参数..."]').click();
-    const firstParam = page.locator('.asm-params .asm-param-cb').first();
-    await expect(firstParam).toBeVisible({ timeout: 10_000 });
-    await firstParam.click();
+    const numericParam = page.locator('.asm-params .asm-param-cb').filter({ hasText: '设定温度' }).first();
+    await expect(numericParam).toBeVisible({ timeout: 10_000 });
+    await numericParam.click();
     await page.getByRole('button', { name: '确 定' }).click();
 
     // 明细表出行（默认视图=列表）

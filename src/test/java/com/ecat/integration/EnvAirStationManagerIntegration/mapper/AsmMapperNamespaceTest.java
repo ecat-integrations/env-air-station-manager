@@ -149,10 +149,11 @@ class AsmMapperNamespaceTest {
         assertTrue(sql.contains("on conflict (data_time, logic_device_unique_id, attr_id, interval_mode) do update set"),
                 "ON CONFLICT 4 列 PK: " + sql);
         assertTrue(sql.contains("avg_value = excluded.avg_value"), "全量覆盖 avg_value");
+        assertTrue(sql.contains("value_text = excluded.value_text"), "覆盖 value_text（非数值重算幂等）");
         assertTrue(sql.contains("valid_count = excluded.valid_count"), "覆盖 valid_count");
         assertTrue(sql.contains("total_count = excluded.total_count"), "覆盖 total_count");
         assertTrue(sql.contains("updated_at = now()"), "刷 updated_at");
-        assertEquals(14, countPlaceholders(bs), "两桶 × 各 7 占位符（updated_at 走 now()）: " + sql);
+        assertEquals(16, countPlaceholders(bs), "两桶 × 各 8 占位符（updated_at 走 now()）: " + sql);
         assertTrue(hasInstantTypeHandler(bs), "data_time 走 TypeHandler");
     }
 

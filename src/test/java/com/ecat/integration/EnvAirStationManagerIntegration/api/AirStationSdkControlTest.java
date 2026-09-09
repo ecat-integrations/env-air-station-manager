@@ -36,13 +36,15 @@ class AirStationSdkControlTest {
     private AsmAlarmRecordMapper alarmRecordMapper;
     @Mock
     private AsmControlService controlService;
+    @Mock
+    private com.ecat.integration.EnvAirStationManagerIntegration.service.AsmDeviceLabelService labelService;
 
     private AirStationSdk sdk;
 
     @BeforeEach
     void setUp() {
         sdk = new AirStationSdkImpl(historyMapper, unitContract, snapshotService,
-                alarmRecordMapper, controlService);
+                alarmRecordMapper, labelService, controlService);
     }
 
     @Test

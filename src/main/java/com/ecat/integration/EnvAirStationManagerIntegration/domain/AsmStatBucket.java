@@ -32,8 +32,13 @@ public class AsmStatBucket {
     private String attrId;
     /** 区间模式码（AsmIntervalMode.code()：FRONT=1/BACK=2）。 */
     private Integer intervalMode;
-    /** 桶内均值（avg-only 唯一聚合值）。 */
+    /** 桶内均值（数值 series 的聚合值；非数值行为 null）。 */
     private Double avgValue;
+    /**
+     * 非数值统计值（ALARM 类: normal/alarm；STATE 类: 状态串）。
+     * 与 avgValue 互斥——同构 raw 层 value_num/value_text 惯例：数值行 null、非数值行 avgValue null。
+     */
+    private String valueText;
     /** 有效样本数。 */
     private Long validCount;
     /** 非空值计数。 */

@@ -13,6 +13,8 @@ import com.ecat.integration.EnvAirStationManagerIntegration.support.AsmIntervalM
 import com.ecat.integration.EnvAirStationManagerIntegration.support.AsmMaterializationMode;
 import com.ecat.integration.EnvAirStationManagerIntegration.support.AsmStatGranularity;
 import com.ecat.integration.EnvAirStationManagerIntegration.support.AsmStatGridBucketing;
+import com.ecat.integration.EnvAirStationManagerIntegration.support.AsmStatSeriesKind;
+import com.ecat.integration.EnvAirStationManagerIntegration.support.AsmStatSeriesKindClassifier;
 import lombok.RequiredArgsConstructor;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -30,20 +32,32 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * ASM avg-only 三级聚合引擎（D3：ASM 内新写精简引擎，不依赖 ADM jar）。
+ * ASM 三级聚合引擎（D3：ASM 内新写精简引擎，不依赖 ADM jar；series 按 {@link AsmStatSeriesKind}
+ * 分流 AVG 数值 / ALARM 报警 / STATE 状态三套口径）。
  *
  * <p>应用场景：对 window 内的 raw 样本 / minute 子桶（fetch 时间范围，非桶边界）按
- * {@link AsmStatGranularity} 分桶产出 avg-only 桶行（avg_value + valid_count/total_count），
+ * {@link AsmStatGranularity} 分桶产出桶行（数值 avg_value / 非数值 value_text + valid_count/total_count），
  * 经 {@link AsmStatMapper} ON CONFLICT 4 列 PK upsert（幂等，重算/回补安全）。聚合全在 Java，
  * DB 只 SELECT WHERE 取源行（零 SQL 聚合）。</p>
  *
- * <p><b>聚合语义（avg-only 精简，无 O3-8h/PM 代表值/单位换算/有效性四态）</b>：
+ * <p><b>聚合语义（精简，无 O3-8h/PM 代表值/单位换算/有效性四态；kind 判定真相源在
+ * {@link AsmStatSeriesKindClassifier} 白名单）</b>：
  * <ul>
- *   <li>minute←raw：桶均值 = 窗口内非空 value_num 算术均值；valid_count = 非空样本数、
+ *   <li>AVG minute←raw：桶均值 = 窗口内非空 value_num 算术均值；valid_count = 非空样本数、
  *       total_count = 窗口内全部样本数；全空桶（valid=0）不写行。</li>
- *   <li>5min/hour←minute 级联：均值按子桶 <b>valid_count 加权</b>（sum(avg*valid)/sum(valid)，
+ *   <li>AVG 5min/hour←minute 级联：均值按子桶 <b>valid_count 加权</b>（sum(avg*valid)/sum(valid)，
  *       非 mean-of-means 简单平均——子桶样本数不等时 mean-of-means 有偏）；父 valid/total =
  *       子桶计数求和；无任何有效子桶的父桶不写行。</li>
+ *   <li>ALARM minute←raw：窗口内任一非空文本样本='alarm' → 'alarm'；全 normal → 'normal'；
+ *       无非空文本样本不写行（无数据 ≠ normal，历史查询可区分）。</li>
+ *   <li>ALARM 5min←minute：桶标时刻点采样（对齐国标报表口径）；hour←minute：窗口内任一 minute
+ *       行='alarm' → 'alarm'（全窗 OR 防漏报，用户修正不用 00 分点采样）。</li>
+ *   <li>STATE minute←raw：距桶标时刻 |dataTime-桶标| 最小的样本值，等距取 dataTime 更新者；
+ *       5min/hour←minute：桶标时刻点采样（hour 即整点 00 分行）；缺行不写父行。</li>
+ *   <li>计数（非数值）：minute 行 valid=窗口内非空文本样本数 / total=窗口全部样本数；5min/hour
+ *       点采样行<b>继承</b>所取 minute 行计数；hour ALARM OR 行=成员 minute 行计数<b>求和</b>。</li>
+ *   <li>互斥不变式：非数值行 avgValue=null / 数值行 valueText=null，构建处保证（数值 avg 值槽与
+ *       文本值槽不混写，与 raw 层 value_num/value_text 同构）。</li>
  * </ul></p>
  *
  * <p><b>门控</b>：只物化有 asm_config_stat 行且 enabled=true 的 series；granularity_mask 位未开的
@@ -65,6 +79,12 @@ public class AsmStatAggregationEngine {
 
     /** fetch 扩窗宽度：每端外扩 1 个该粒度桶（覆盖首/末桶被窗口边界部分覆盖的情形；upsert 幂等多覆盖无害）。 */
     private static final int FETCH_PAD_BUCKETS = 1;
+
+    /** ALARM series 的报警态值串（raw 层 value_text 值域 normal/alarm；字面量判定，拼写由引擎单测锁死）。 */
+    private static final String ALARM_VALUE = "alarm";
+
+    /** ALARM series 的正常态值串。 */
+    private static final String NORMAL_VALUE = "normal";
 
     private final Log log = LogFactory.getLogger(getClass());
 
@@ -157,19 +177,20 @@ public class AsmStatAggregationEngine {
         return bucketCount;
     }
 
-    /** 单 series 一轮：fetch（扩窗 1 桶）→ Java 分桶聚合 → upsert。空产出（无源行/全空桶）返 0。 */
+    /** 单 series 一轮：fetch（扩窗 1 桶）→ kind 分流聚合 → upsert。空产出（无源行/全空桶）返 0。 */
     private int materializeOneSeries(AsmStatGranularity gran, AsmIntervalMode mode,
                                      AsmConfigStat cfg, Instant ws, Instant we) {
         Duration pad = gran.interval().multipliedBy(FETCH_PAD_BUCKETS);
         Instant fetchStart = ws.minus(pad);
         Instant fetchEnd = we.plus(pad);
+        AsmStatSeriesKind kind = AsmStatSeriesKindClassifier.kindOf(cfg.getAttrId());
         List<AsmStatBucket> buckets;
         if (gran == AsmStatGranularity.MINUTE) {
-            buckets = aggregateMinute(
+            buckets = aggregateMinuteByKind(kind,
                     fetchRawSamples(mode, fetchStart, fetchEnd, cfg.getLogicDeviceUniqueId(), cfg.getAttrId()),
                     mode, cfg);
         } else {
-            buckets = aggregateCascade(
+            buckets = aggregateCascadeByKind(kind,
                     fetchChildBuckets(gran, mode, fetchStart, fetchEnd, cfg.getLogicDeviceUniqueId(), cfg.getAttrId()),
                     gran, mode, cfg);
         }
@@ -187,15 +208,43 @@ public class AsmStatAggregationEngine {
         return written;
     }
 
-    /** minute←raw 分桶聚合：非空样本算术均值；valid=非空数、total=全部样本数；全空桶不产行。 */
-    private List<AsmStatBucket> aggregateMinute(List<AsmRawRow> samples, AsmIntervalMode mode, AsmConfigStat cfg) {
-        Map<Instant, List<AsmRawRow>> byBucket = new LinkedHashMap<>();
-        for (AsmRawRow s : samples) {
-            Instant label = AsmStatGridBucketing.truncateToGrid(s.getDataTime(), AsmStatGranularity.MINUTE, mode);
-            byBucket.computeIfAbsent(label, k -> new ArrayList<>()).add(s);
+    /**
+     * minute←raw 按 series 类别分流。ALARM/STATE 各自独立口径方法，不混入 AVG 主路径
+     * （数值均值行为保持既有不变）；classifier 返 NONE = 数值 series——seed 准入已挡非统计对象
+     * 进 asm_config_stat，引擎上下文内 NONE 只有数值一种形态，落 AVG 路径。
+     */
+    private List<AsmStatBucket> aggregateMinuteByKind(AsmStatSeriesKind kind, List<AsmRawRow> samples,
+                                                      AsmIntervalMode mode, AsmConfigStat cfg) {
+        if (kind == AsmStatSeriesKind.ALARM) {
+            return aggregateAlarmMinute(samples, mode, cfg);
         }
-        List<AsmStatBucket> buckets = new ArrayList<>(byBucket.size());
-        for (Map.Entry<Instant, List<AsmRawRow>> e : byBucket.entrySet()) {
+        if (kind == AsmStatSeriesKind.STATE) {
+            return aggregateStateMinute(samples, mode, cfg);
+        }
+        return aggregateMinute(samples, mode, cfg);
+    }
+
+    /**
+     * 5min/hour←minute 按 series 类别分流。STATE 两粒度均为桶标点采样；ALARM 仅 5min 点采样
+     * （对齐国标报表口径）、hour 为全窗 OR（防漏报，两粒度口径不同）；AVG 保持既有加权级联。
+     */
+    private List<AsmStatBucket> aggregateCascadeByKind(AsmStatSeriesKind kind, List<AsmStatBucket> children,
+                                                       AsmStatGranularity gran, AsmIntervalMode mode, AsmConfigStat cfg) {
+        if (kind == AsmStatSeriesKind.STATE) {
+            return aggregatePointSampledMinute(children, gran, mode, cfg);
+        }
+        if (kind == AsmStatSeriesKind.ALARM) {
+            return gran == AsmStatGranularity.HOUR
+                    ? aggregateAlarmHourFromMinute(children, mode, cfg)
+                    : aggregatePointSampledMinute(children, gran, mode, cfg);
+        }
+        return aggregateCascade(children, gran, mode, cfg);
+    }
+
+    /** minute←raw 分桶聚合（AVG 数值）：非空样本算术均值；valid=非空数、total=全部样本数；全空桶不产行。 */
+    private List<AsmStatBucket> aggregateMinute(List<AsmRawRow> samples, AsmIntervalMode mode, AsmConfigStat cfg) {
+        List<AsmStatBucket> buckets = new ArrayList<>();
+        for (Map.Entry<Instant, List<AsmRawRow>> e : groupRawByMinuteBucket(samples, mode).entrySet()) {
             BigDecimal sum = BigDecimal.ZERO;
             long valid = 0;
             for (AsmRawRow s : e.getValue()) {
@@ -220,16 +269,67 @@ public class AsmStatAggregationEngine {
         return buckets;
     }
 
-    /** 级联分桶聚合（5min/hour←minute）：按子桶 valid_count 加权均值；父计数=子计数求和；无有效子桶不产行。 */
+    /**
+     * ALARM minute←raw：小窗 OR 口径——窗口内任一非空文本样本 = 'alarm' 即 'alarm'（期间发生过
+     * 报警即记录）；全 normal → 'normal'；无非空文本样本不产行（无数据 ≠ normal，历史查询可区分
+     * 「正常」与「无数据」）。计数：valid=窗口内非空文本样本数、total=窗口全部样本数。
+     */
+    private List<AsmStatBucket> aggregateAlarmMinute(List<AsmRawRow> samples, AsmIntervalMode mode, AsmConfigStat cfg) {
+        List<AsmStatBucket> buckets = new ArrayList<>();
+        for (Map.Entry<Instant, List<AsmRawRow>> e : groupRawByMinuteBucket(samples, mode).entrySet()) {
+            boolean alarm = false;
+            long valid = 0;
+            for (AsmRawRow s : e.getValue()) {
+                if (hasText(s)) {
+                    valid++;
+                    alarm = alarm || ALARM_VALUE.equals(s.getValueText());
+                }
+            }
+            if (valid == 0) {
+                continue;
+            }
+            buckets.add(textBucket(e.getKey(), mode, cfg, alarm ? ALARM_VALUE : NORMAL_VALUE,
+                    valid, e.getValue().size()));
+        }
+        return buckets;
+    }
+
+    /**
+     * STATE minute←raw：点状态口径——取距桶标时刻 |dataTime-桶标| 最小的非空文本样本（FRONT 桶标
+     * =左沿偏早样本、BACK=右沿偏晚样本，桶窗开闭与 AVG 同一 {@link AsmStatGridBucketing} 定义，
+     * 仅聚合函数不同）；等距取 dataTime 更新者；无非空文本样本不产行。计数与 ALARM minute 同形。
+     */
+    private List<AsmStatBucket> aggregateStateMinute(List<AsmRawRow> samples, AsmIntervalMode mode, AsmConfigStat cfg) {
+        List<AsmStatBucket> buckets = new ArrayList<>();
+        for (Map.Entry<Instant, List<AsmRawRow>> e : groupRawByMinuteBucket(samples, mode).entrySet()) {
+            Instant label = e.getKey();
+            AsmRawRow nearest = null;
+            long valid = 0;
+            for (AsmRawRow s : e.getValue()) {
+                if (!hasText(s)) {
+                    continue;
+                }
+                valid++;
+                if (nearest == null || nearerToLabel(s, nearest, label)) {
+                    nearest = s;
+                }
+            }
+            if (nearest == null) {
+                continue;
+            }
+            buckets.add(textBucket(label, mode, cfg, nearest.getValueText(), valid, e.getValue().size()));
+        }
+        return buckets;
+    }
+
+    /**
+     * 级联分桶聚合（AVG 数值，5min/hour←minute）：按子桶 valid_count 加权均值；父计数=子计数求和；
+     * 无有效子桶不产行。
+     */
     private List<AsmStatBucket> aggregateCascade(List<AsmStatBucket> children, AsmStatGranularity gran,
                                                  AsmIntervalMode mode, AsmConfigStat cfg) {
-        Map<Instant, List<AsmStatBucket>> byBucket = new LinkedHashMap<>();
-        for (AsmStatBucket c : children) {
-            Instant label = AsmStatGridBucketing.truncateToGrid(c.getDataTime(), gran, mode);
-            byBucket.computeIfAbsent(label, k -> new ArrayList<>()).add(c);
-        }
-        List<AsmStatBucket> buckets = new ArrayList<>(byBucket.size());
-        for (Map.Entry<Instant, List<AsmStatBucket>> e : byBucket.entrySet()) {
+        List<AsmStatBucket> buckets = new ArrayList<>();
+        for (Map.Entry<Instant, List<AsmStatBucket>> e : groupChildrenByBucket(children, gran, mode).entrySet()) {
             BigDecimal weightedSum = BigDecimal.ZERO;
             long validSum = 0;
             long totalSum = 0;
@@ -257,21 +357,121 @@ public class AsmStatAggregationEngine {
         return buckets;
     }
 
-    /** 取窗口内 raw 样本（minute 源）：data_time + value_num 窄投影；WHERE 开闭随 mode。 */
+    /**
+     * 非数值级联点采样（5min ALARM/STATE、hour STATE）：取桶标时刻同 mode 的 minute 行——FRONT
+     * 桶标=左沿（10:05 桶 → minute 10:05 行）、BACK 桶标=右沿（10:10 桶 → minute 10:10 行）、
+     * hour 桶标即整点 00 分行；计数<b>继承</b>所取 minute 行（点采样不叠加）；缺行不写父行。
+     */
+    private List<AsmStatBucket> aggregatePointSampledMinute(List<AsmStatBucket> children, AsmStatGranularity gran,
+                                                            AsmIntervalMode mode, AsmConfigStat cfg) {
+        List<AsmStatBucket> buckets = new ArrayList<>();
+        for (Map.Entry<Instant, List<AsmStatBucket>> e : groupChildrenByBucket(children, gran, mode).entrySet()) {
+            Instant label = e.getKey();
+            for (AsmStatBucket c : e.getValue()) {
+                if (label.equals(c.getDataTime())) {
+                    buckets.add(textBucket(label, mode, cfg, c.getValueText(),
+                            c.getValidCount() == null ? 0L : c.getValidCount(),
+                            c.getTotalCount() == null ? 0L : c.getTotalCount()));
+                    break;  // minute 行 (data_time, uid, attr, mode) 是 PK，桶标时刻至多一行，命中即止
+                }
+            }
+        }
+        return buckets;
+    }
+
+    /**
+     * hour ALARM←minute：全窗 OR 口径（用户修正，不用 00 分点采样防漏报）——窗口内同 mode 任一
+     * minute 行 = 'alarm' 即 'alarm'；全 normal → 'normal'；无 minute 行不产行（分组只从实际子行
+     * 建立，空组天然无行）。计数=成员 minute 行 valid/total 各自<b>求和</b>（报警覆盖时长的证据量）。
+     */
+    private List<AsmStatBucket> aggregateAlarmHourFromMinute(List<AsmStatBucket> children, AsmIntervalMode mode,
+                                                             AsmConfigStat cfg) {
+        List<AsmStatBucket> buckets = new ArrayList<>();
+        for (Map.Entry<Instant, List<AsmStatBucket>> e : groupChildrenByBucket(children, AsmStatGranularity.HOUR, mode).entrySet()) {
+            boolean alarm = false;
+            long validSum = 0;
+            long totalSum = 0;
+            for (AsmStatBucket c : e.getValue()) {
+                validSum += c.getValidCount() == null ? 0L : c.getValidCount();
+                totalSum += c.getTotalCount() == null ? 0L : c.getTotalCount();
+                alarm = alarm || ALARM_VALUE.equals(c.getValueText());
+            }
+            buckets.add(textBucket(e.getKey(), mode, cfg, alarm ? ALARM_VALUE : NORMAL_VALUE, validSum, totalSum));
+        }
+        return buckets;
+    }
+
+    /**
+     * 非数值桶行唯一构建出口（ALARM/STATE 各策略共用）：valueText 落值、avgValue 恒不设
+     * （builder 缺省 null）——互斥不变式集中在构建处一处保证、一处可检。
+     */
+    private static AsmStatBucket textBucket(Instant label, AsmIntervalMode mode, AsmConfigStat cfg,
+                                            String valueText, long valid, long total) {
+        return AsmStatBucket.builder()
+                .dataTime(label)
+                .logicDeviceUniqueId(cfg.getLogicDeviceUniqueId())
+                .attrId(cfg.getAttrId())
+                .intervalMode(mode.code())
+                .valueText(valueText)
+                .validCount(valid)
+                .totalCount(total)
+                .build();
+    }
+
+    /**
+     * STATE 选样判据：候选距桶标更近者胜；等距取 dataTime 更新者。几何事实：分钟桶内样本恒在桶标
+     * 同侧（FRONT 标=左沿 / BACK 标=右沿），|dataTime-桶标| 对不同 dataTime 严格单调——等距分支
+     * 仅在<b>同一 dataTime 的重复 raw 行</b>（raw 表主键为 bigserial id，允许同刻多行）时到达，
+     * 此时 isAfter 恒 false、保留首行；保留该分支是规则原文（等距取新）的逐字实现。
+     */
+    private static boolean nearerToLabel(AsmRawRow candidate, AsmRawRow incumbent, Instant label) {
+        int cmp = Duration.between(label, candidate.getDataTime()).abs()
+                .compareTo(Duration.between(label, incumbent.getDataTime()).abs());
+        return cmp < 0 || (cmp == 0 && candidate.getDataTime().isAfter(incumbent.getDataTime()));
+    }
+
+    /** raw 样本是否带非空文本值（非数值 series 的有效样本判据；null/空串不计入 valid 与口径判定）。 */
+    private static boolean hasText(AsmRawRow s) {
+        return s.getValueText() != null && !s.getValueText().isEmpty();
+    }
+
+    /** raw 样本按 minute 桶标分组（minute 三口径共用；LinkedHashMap 保时间序，输出行序稳定可复现）。 */
+    private static Map<Instant, List<AsmRawRow>> groupRawByMinuteBucket(List<AsmRawRow> samples, AsmIntervalMode mode) {
+        Map<Instant, List<AsmRawRow>> byBucket = new LinkedHashMap<>();
+        for (AsmRawRow s : samples) {
+            Instant label = AsmStatGridBucketing.truncateToGrid(s.getDataTime(), AsmStatGranularity.MINUTE, mode);
+            byBucket.computeIfAbsent(label, k -> new ArrayList<>()).add(s);
+        }
+        return byBucket;
+    }
+
+    /** minute 子桶按父粒度桶标分组（级联各口径共用；保序同上）。 */
+    private static Map<Instant, List<AsmStatBucket>> groupChildrenByBucket(List<AsmStatBucket> children,
+                                                                           AsmStatGranularity gran, AsmIntervalMode mode) {
+        Map<Instant, List<AsmStatBucket>> byBucket = new LinkedHashMap<>();
+        for (AsmStatBucket c : children) {
+            Instant label = AsmStatGridBucketing.truncateToGrid(c.getDataTime(), gran, mode);
+            byBucket.computeIfAbsent(label, k -> new ArrayList<>()).add(c);
+        }
+        return byBucket;
+    }
+
+    /** 取窗口内 raw 样本（minute 源）：data_time + value_num + value_text 窄投影（数值/非数值槽都带）；WHERE 开闭随 mode。 */
     private List<AsmRawRow> fetchRawSamples(AsmIntervalMode mode, Instant ws, Instant we, String uid, String attrId) {
-        String sql = "select src.data_time, src.value_num from asm_data_sample src"
+        String sql = "select src.data_time, src.value_num, src.value_text from asm_data_sample src"
                 + " where " + whereExpression(mode)
                 + " and src.logic_device_unique_id = ? and src.attr_id = ?";
         return jdbcTemplate.query(sql, (rs, rowNum) -> AsmRawRow.of(
                         toInstant(rs.getObject("data_time")),
-                        toBigDecimal(rs.getObject("value_num"))),
+                        toBigDecimal(rs.getObject("value_num")),
+                        rs.getString("value_text")),
                 toOdt(ws), toOdt(we), uid, attrId);
     }
 
-    /** 取窗口内 minute 子桶（级联源）：恒带 interval_mode 自洽过滤。 */
+    /** 取窗口内 minute 子桶（级联源）：恒带 interval_mode 自洽过滤；value_text 供非数值点采样/OR。 */
     private List<AsmStatBucket> fetchChildBuckets(AsmStatGranularity gran, AsmIntervalMode mode,
                                                   Instant ws, Instant we, String uid, String attrId) {
-        String sql = "select src.data_time, src.avg_value, src.valid_count, src.total_count from "
+        String sql = "select src.data_time, src.avg_value, src.valid_count, src.total_count, src.value_text from "
                 + gran.sourceTable() + " src"
                 + " where " + whereExpression(mode)
                 + " and src.logic_device_unique_id = ? and src.attr_id = ?"
@@ -281,6 +481,7 @@ public class AsmStatAggregationEngine {
                         .avgValue(toNullableDouble(rs.getObject("avg_value")))
                         .validCount(rs.getLong("valid_count"))
                         .totalCount(rs.getLong("total_count"))
+                        .valueText(rs.getString("value_text"))
                         .build(),
                 toOdt(ws), toOdt(we), uid, attrId);
     }

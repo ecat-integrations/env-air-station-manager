@@ -1,5 +1,5 @@
 /**
- * ASM G12 回归（2026-08-21 设备配置管理 P1-P5，设计 docs/design/2026-08-21-asm-station-device-config.md）：
+ * ASM G12 回归（2026-08-21 设备配置管理 P1-P5，现行设计 docs/device-config.md）：
  *  - G12-1 逐类型槽用例（37 槽数据驱动，覆盖 22 类型）：sidebar 出现 + 三态与 GET /asm-monitor/device/params
  *         一致（CONFIGURED↔✓徽标；UNBOUND/NOT_CREATED↔无徽标且 Detail 提示文案区分）+ 配置入口可打开。
  *  - G12-2 完整绑定链（LIGHTING，saimosen SMS8910V2 → 真实模拟器 modbus_tcp 127.0.0.1:1507）：
