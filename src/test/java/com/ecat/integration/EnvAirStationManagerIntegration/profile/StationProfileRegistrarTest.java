@@ -15,6 +15,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * profile 全矩阵注册测试：22 类型除 ELECTRONIC_FENCE（仅 stub mapping 无真实集成）外
  * 每类型至少一个厂商；注册键 (deviceType, coordinate, model) 可精确回查；矩阵外不发明。
+ *
+ * @author coffee
  */
 class StationProfileRegistrarTest {
 

@@ -31,6 +31,8 @@ import static org.mockito.Mockito.when;
  * ASM 三粒度调度器单测——注入 mock executor 捕获 task（手动 run() 同步触发，无 sleep）：
  * 三个 scheduleAtFixedRate / start 幂等 / scheduledTick 必 catch（task 抛异常不致永久抑制）/
  * tick 窗口与粒度传参正确。
+ *
+ * @author coffee
  */
 @ExtendWith(MockitoExtension.class)
 class AsmStatRefreshSchedulerTest {

@@ -24,6 +24,8 @@ import java.util.Map;
  * </ol>
  *
  * <p>无撕裂读（属性状态契约 §15）：每 attr 经 {@code getState()} 一次取不可变 {@link AttrState}。</p>
+ *
+ * @author coffee
  */
 public final class AsmOnlineJudge {
 

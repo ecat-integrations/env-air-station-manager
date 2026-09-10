@@ -26,6 +26,8 @@ import static org.mockito.Mockito.verifyNoMoreInteractions;
 /**
  * AsmStatPartitionManager 单测——月迭代 / UTC 月边界 / 缓存 / 严格校验（对齐 ADM AdmStatPartitionManagerTest，
  * ASM 三张父表）。Mockito mock JdbcTemplate 验 DDL 语句字符串；无 sleep 无真实 DB。
+ *
+ * @author coffee
  */
 @ExtendWith(MockitoExtension.class)
 class AsmStatPartitionManagerTest {

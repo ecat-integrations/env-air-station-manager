@@ -38,6 +38,8 @@ import static org.mockito.Mockito.when;
  * JdbcTemplate RowMapper lambda）的全分支覆盖——jacoco 实测这组分支 0 覆盖（mock 直接返已typed
  * 对象绕过转换），但 PG 驱动实际会返 OffsetDateTime / 某些路径返 Timestamp，转换错即静默错数据，
  * 属真缺口。经捕获 RowMapper + mock ResultSet 逐类型驱动（不连 DB）。
+ *
+ * @author coffee
  */
 @ExtendWith(MockitoExtension.class)
 class AsmStatAggregationEngineTypeConversionTest {

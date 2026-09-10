@@ -24,6 +24,8 @@ import static org.mockito.Mockito.when;
 /**
  * TimestamptzInstantTypeHandler 单测——锁 timestamptz↔Instant 经 OffsetDateTime 中转的读写契约
  * （对齐 ADM 同名测法）。
+ *
+ * @author coffee
  */
 @ExtendWith(MockitoExtension.class)
 class TimestamptzInstantTypeHandlerTest {

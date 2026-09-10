@@ -22,6 +22,8 @@ import static org.mockito.Mockito.when;
 /**
  * 配置读写收口：mask/mode 严格校验抛、STORAGE purpose 拒绝（seed 域）、
  * config_unit 写后必调 AsmUnitContract.invalidate（负结果缓存教训）、config_stat 不 invalidate。
+ *
+ * @author coffee
  */
 @ExtendWith(MockitoExtension.class)
 class AsmConfigServiceTest {

@@ -21,6 +21,8 @@ import static org.mockito.Mockito.when;
 /**
  * AsmMonitorSseController 单测——token query 校验（缺失/无效/裸 token Bearer 转发）+ emitter 注册。
  * 平移 ADM AdmMonitorSseControllerTest 模式（TokenService 非 final 可 mock；无 sleep）。
+ *
+ * @author coffee
  */
 class AsmMonitorSseControllerTest {
 

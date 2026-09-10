@@ -10,6 +10,8 @@ import java.util.Map;
  * {@link #getStrategy()}，{@code FlowDriver} 据此分派 IMPORT_FLOW / USER_FLOW。
  *
  * <p>与 ADM 差异：无 aggregationMode（ASM 物化模式与设备型号无关，绑定不联动配置表）。
+ *
+ * @author coffee
  */
 public interface StationProvisionProfile {
 

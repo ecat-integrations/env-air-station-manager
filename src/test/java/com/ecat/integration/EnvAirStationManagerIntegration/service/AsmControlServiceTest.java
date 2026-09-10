@@ -51,6 +51,8 @@ import static org.mockito.Mockito.when;
  * 控制服务单测——手动驱动 executor / 超时调度器 / 时钟（零 sleep，确定性时序）：
  * PENDING 先落 → 执行回填 SUCCESS/FAILED；超时回填 TIMEOUT 且迟到执行不双写；
  * before/after 取真实 AttrState（builder 构造，禁 mock final）；非法入参/不可写明确抛。
+ *
+ * @author coffee
  */
 @ExtendWith(MockitoExtension.class)
 class AsmControlServiceTest {

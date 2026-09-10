@@ -10,6 +10,8 @@ import lombok.Value;
  * {@code unit} 单位<b>符号</b>（UnitInfo.getName，如 °C/V）由后端出口统一供给，前端不再维护映射。</p>
  *
  * <p>帧名 {@link #TYPE}（"device.data.update"）与 ADM 同名——前端具名 listener 匹配 {@code event:} 帧头。</p>
+ *
+ * @author coffee
  */
 @Value
 public class AsmSseEvent {

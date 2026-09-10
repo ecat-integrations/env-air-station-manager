@@ -9,6 +9,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
  * AsmMaterializationMode 单测——modes() 展开物化区间模式集合 / of() 严格解析。
+ *
+ * @author coffee
  */
 class AsmMaterializationModeTest {
 

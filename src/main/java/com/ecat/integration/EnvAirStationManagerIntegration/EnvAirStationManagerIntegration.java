@@ -49,6 +49,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
  * <p>onStart 装载 jar 后装配 raw consumer（订阅总线攒批落 asm_data_sample + 首见 seed）+
  * 启动预 seed（枚举 LogicDeviceManager 现存站房设备）+ stat 月分区 ensure + 三粒度物化调度器 +
  * 报警链路（规则索引/评估 consumer/心跳 sweep）+ 总览页 SSE consumer；onPause/onRelease 反向收口。</p>
+ *
+ * @author coffee
  */
 public class EnvAirStationManagerIntegration extends IntegrationBase {
 

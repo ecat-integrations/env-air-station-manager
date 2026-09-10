@@ -9,6 +9,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
  * AsmIntervalMode 单测——code 编码 / fromCode·of 解码 / 非法值严格抛。
  *
  * <p>扁平 @Test 非 @Nested（本模块 surefire 2.22.2 不发现纯 @Nested，同 ADM 教训）。</p>
+ *
+ * @author coffee
  */
 class AsmIntervalModeTest {
 

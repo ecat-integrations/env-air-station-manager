@@ -22,6 +22,8 @@ import static org.mockito.Mockito.verify;
 /**
  * AsmSseBroadcaster 单测——池增删查 + 具名帧（F1 硬要求）+ 死连接清理 + 心跳 comment 帧。
  * 平移 ADM AdmSseBroadcasterTest 模式（SseEmitter 非 final 可 mock）。
+ *
+ * @author coffee
  */
 class AsmSseBroadcasterTest {
 

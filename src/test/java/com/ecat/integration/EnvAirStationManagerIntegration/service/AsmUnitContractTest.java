@@ -25,6 +25,8 @@ import static org.mockito.Mockito.when;
 /**
  * AsmUnitContract 单测——per-uid 缓存命中 / 负结果不终身缓存（空行集不入缓存，seed 后立即可见）/
  * invalidate 失效重读。
+ *
+ * @author coffee
  */
 @ExtendWith(MockitoExtension.class)
 class AsmUnitContractTest {

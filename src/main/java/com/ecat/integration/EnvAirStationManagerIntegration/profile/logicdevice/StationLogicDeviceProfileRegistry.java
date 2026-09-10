@@ -8,6 +8,8 @@ import java.util.Map;
 /**
  * 站房 logic device profile 注册表（每类型槽一个实例，共 37）。
  * 与物理 {@code StationProvisionProfileRegistry}（厂家下拉用）分离——logic profile 是内部的。
+ *
+ * @author coffee
  */
 public class StationLogicDeviceProfileRegistry {
 

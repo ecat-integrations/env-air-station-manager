@@ -31,6 +31,8 @@ import static org.mockito.Mockito.when;
 /**
  * 控制记录列表端点：时间窗/uid/origin/result 过滤解析 + 分页缺省（机制同 AsmAlarmRecordController）；
  * origin/result 字符串严格 valueOf（未知值抛 IllegalArgumentException 不静默忽略）。
+ *
+ * @author coffee
  */
 @ExtendWith(MockitoExtension.class)
 class AsmControlRecordControllerTest {

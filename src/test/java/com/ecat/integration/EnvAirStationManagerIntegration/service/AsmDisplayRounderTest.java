@@ -7,6 +7,8 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 
 /**
  * AsmDisplayRounder 单测——HALF_EVEN 边界 / null / 负数 / 精度来源缺失走默认。
+ *
+ * @author coffee
  */
 class AsmDisplayRounderTest {
 

@@ -11,6 +11,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * 单位候选目录（单位设置抽屉）：同类组在前 + 气态源追加跨类浓度组；非气态源只有同类组。
+ *
+ * @author coffee
  */
 class AsmUnitOptionCatalogTest {
 

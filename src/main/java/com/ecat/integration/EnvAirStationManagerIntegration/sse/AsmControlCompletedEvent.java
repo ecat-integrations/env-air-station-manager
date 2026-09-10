@@ -10,6 +10,8 @@ import lombok.Value;
  *
  * <p>帧名 {@link #TYPE}（"control.completed"）；uid 前缀校验在提交入口（非站房不受理），
  * 故本帧天然站房-only（AsmControlService 受理时校验 uid 前缀）。</p>
+ *
+ * @author coffee
  */
 @Value
 public class AsmControlCompletedEvent {

@@ -9,6 +9,8 @@ import java.util.List;
 /**
  * ASM 站房设备变更追溯 mapper（append-only：insert + selectList，无 update/delete）。
  * 不加 {@code @Mapper}（DynamicJarLoader 路径注册）。
+ *
+ * @author coffee
  */
 public interface AsmDeviceChangeRecordMapper {
 

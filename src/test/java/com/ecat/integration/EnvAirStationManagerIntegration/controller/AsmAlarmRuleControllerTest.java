@@ -40,6 +40,8 @@ import static org.mockito.Mockito.withSettings;
  * （库值 settingContent configurable!=true）标识禁改 400「系统预置报警标识不可修改」；
  * list 行追加 deviceLabels（槽中文 StationParamMeta 同源 + attr 中文 registry attrDefs 同源，
  * mock registry 桩验证解析与回退）。</p>
+ *
+ * @author coffee
  */
 @ExtendWith(MockitoExtension.class)
 class AsmAlarmRuleControllerTest {

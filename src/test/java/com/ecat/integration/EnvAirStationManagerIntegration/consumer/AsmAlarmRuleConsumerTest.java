@@ -30,6 +30,8 @@ import static org.mockito.Mockito.when;
 
 /**
  * 报警评估 consumer：logicdevice_station.* 过滤 + 逐事件评估 + 触发记录落库（与数据管道 consumer 分离）。
+ *
+ * @author coffee
  */
 @ExtendWith(MockitoExtension.class)
 class AsmAlarmRuleConsumerTest {

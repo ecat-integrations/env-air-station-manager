@@ -29,6 +29,8 @@ import static org.mockito.Mockito.when;
 /**
  * SDK queryAlarmEntries/listAlarmTypes：入参严格校验 + episode 重叠出口委派 + 表格对齐行组装
  * + 目录映射与坏行隔离。SQL 窗口语义（左开右闭谓词）由 AsmAlarmRecordMapperSqlShapeTest 锁定。
+ *
+ * @author coffee
  */
 @ExtendWith(MockitoExtension.class)
 class AsmAlarmSdkQueryTest {

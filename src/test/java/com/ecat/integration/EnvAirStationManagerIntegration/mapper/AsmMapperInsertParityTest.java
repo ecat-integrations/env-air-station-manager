@@ -21,6 +21,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * upsert 漏被 e2e PUT 抓到；insertIfAbsent 漏致 seed 抛 BadSqlGrammar，consumer 首见路整批
  * raw 数据丢弃两万余条）。单测 mock mapper 时 XML 不经真实解析执行，这类失衡只有真库才爆，
  * 本测试逐条 insert 静态对账「列数 == values 表达式数」把整类 bug 拦在编译期旁边。</p>
+ *
+ * @author coffee
  */
 class AsmMapperInsertParityTest {
 

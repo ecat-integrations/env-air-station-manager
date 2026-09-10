@@ -12,6 +12,8 @@ import com.ecat.core.Device.DeviceBase;
 /**
  * 三态判定纯函数测试（移植 ADM AirDeviceBindingServiceStateTest 的判定矩阵）：
  * CONFIGURED（logic+phy 都在）/ UNBOUND（其一在）/ NOT_CREATED（均不在）。
+ *
+ * @author coffee
  */
 class StationDeviceBindingServiceStateTest {
 

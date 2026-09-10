@@ -20,6 +20,8 @@ import static org.mockito.Mockito.when;
 /**
  * REMOTE 控制入口：caller 取认证 principal 透传、origin=REMOTE 汇入统一控制服务、响应含记录 id+result；
  * GET /{id} 单查（SSE 重连补偿）三态：PENDING 中查 / 终态 / 不存在明确 IAE。
+ *
+ * @author coffee
  */
 @ExtendWith(MockitoExtension.class)
 class AsmControlControllerTest {

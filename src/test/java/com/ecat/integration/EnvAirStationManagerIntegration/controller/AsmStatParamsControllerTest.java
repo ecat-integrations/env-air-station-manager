@@ -27,6 +27,8 @@ import static org.mockito.Mockito.when;
  * stat-params 端点与 SDK 同源：复用 {@link AirStationSdk#listStatParams()} 同一构建结果逐行包装
  * （meta 平铺透传，不另造投影），并追加历史页中文契约字段 {@code display_unit}（storageUnit →
  * UnitInfo.getDisplayName 显示串）与 {@code device_label}（槽中文名，AsmDeviceLabelService 同源）。
+ *
+ * @author coffee
  */
 @ExtendWith(MockitoExtension.class)
 class AsmStatParamsControllerTest {

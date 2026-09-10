@@ -14,6 +14,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * 类型槽元数据测试：22 类型全覆盖（枚举 vs DeviceType.Station.values）、37 槽、uniqueId 公式、
  * fromType 往返 + 严格拒绝未知槽键。
+ *
+ * @author coffee
  */
 class StationParamMetaTest {
 

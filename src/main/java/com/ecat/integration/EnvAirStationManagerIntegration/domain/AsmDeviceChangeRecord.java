@@ -12,6 +12,8 @@ import java.time.Instant;
  *
  * <p>eventType 5 种：FIRST_BIND/REBIND/REPLACE/UNBIND/RECONFIGURE；仅 REPLACE 填
  * {@link #prevPhysicalDeviceUniqueId}。业务键 logicDeviceUniqueId + attrId + occurredAt。
+ *
+ * @author coffee
  */
 @Data
 @NoArgsConstructor

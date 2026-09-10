@@ -39,6 +39,8 @@ import static org.mockito.Mockito.when;
  * （FRONT 左沿 / BACK 右沿）/ hour ALARM 全窗 OR 防漏报（00 分行缺失仍出 alarm）/ 计数四形态
  * （非数值 minute 非空文本计数、点采样继承、hour OR 求和、数值 AVG 不变）/ avgValue-valueText
  * 互斥 / FRONT、BACK 双 mode 独立成行。JdbcTemplate mock 取数（聚合全在 Java），无 DB 无 sleep。
+ *
+ * @author coffee
  */
 @ExtendWith(MockitoExtension.class)
 class AsmStatAggregationEngineNonNumericTest {

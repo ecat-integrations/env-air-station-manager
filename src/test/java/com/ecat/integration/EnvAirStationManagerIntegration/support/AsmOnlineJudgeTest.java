@@ -29,6 +29,8 @@ import static org.mockito.Mockito.when;
  *       「一分钟内更新过=online」同语义边界）；</li>
  *   <li>全部 attr 无 state（设备从未喂数）→ 离线 + offlineMs=null（时长未知）。</li>
  * </ol>
+ *
+ * @author coffee
  */
 class AsmOnlineJudgeTest {
 

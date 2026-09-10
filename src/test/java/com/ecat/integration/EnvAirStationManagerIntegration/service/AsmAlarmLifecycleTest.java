@@ -31,6 +31,8 @@ import static org.mockito.Mockito.when;
  * 报警心跳窗生命周期 TDD：续期不落新行 / 窗口外新 episode / sweep 闭单摘槽 / POWER 恢复闭单 /
  * registry 启动重建。全 mock mapper（无 DB，sweep 侧见 AsmAlarmSweepSchedulerTest），
  * 时间全部显式 Instant（禁 sleep）。
+ *
+ * @author coffee
  */
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)

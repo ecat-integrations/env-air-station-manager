@@ -48,6 +48,8 @@ import static org.mockito.Mockito.when;
  * <b>恰好一次</b> raw 批量查询（IN 全部缺值 uid）+ 恰好一次 preload，替代逐设备串行往返
  * （远程库实测每 uid 30~140ms，37 设备串行 = 秒级页面首载税）。真实 registry 注册设备
  * （同 AsmSnapshotAlarmTest 模式），禁 sleep 全同步。
+ *
+ * @author coffee
  */
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)

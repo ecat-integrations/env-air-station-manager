@@ -32,6 +32,8 @@ import java.util.concurrent.TimeUnit;
  *
  * <p><b>生命周期</b>：SseEmitter onCompletion/onTimeout/onError 三回调统一 unregister + broadcast/heartbeat
  * 死连接清理，双重防泄漏。心跳 5s daemon ScheduledExecutor（@PostConstruct 起 / @PreDestroy 停，无 sleep）。</p>
+ *
+ * @author coffee
  */
 @Slf4j
 @RestController

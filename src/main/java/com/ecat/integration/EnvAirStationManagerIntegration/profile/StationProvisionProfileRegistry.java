@@ -16,6 +16,8 @@ import java.util.Map;
  * <b>厂商列表唯一来源</b>：{@link #getByType} 只返回已注册的 profile（未注册即空，不兜底
  * LogicMappingManager）。注册时机：{@code EnvAirStationManagerIntegration.onStart}（经
  * {@link StationProfileRegistrar} 全矩阵注册）。
+ *
+ * @author coffee
  */
 public class StationProvisionProfileRegistry {
 

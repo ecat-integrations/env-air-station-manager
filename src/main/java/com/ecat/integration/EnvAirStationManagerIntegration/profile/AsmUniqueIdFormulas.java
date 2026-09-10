@@ -11,6 +11,8 @@ import java.util.Map;
  * <p>只登记 airstation 矩阵实际涉及的厂商坐标（grep logicdevice-airstation DeviceMappings 全量坐标）；
  * 未登记坐标返 null = 无复用探测（每 step 监测自然跳过，flow 自身仍会做 DuplicateUniqueId 校验，
  * 非兜底而是「未知即不预判」）。
+ *
+ * @author coffee
  */
 final class AsmUniqueIdFormulas {
 

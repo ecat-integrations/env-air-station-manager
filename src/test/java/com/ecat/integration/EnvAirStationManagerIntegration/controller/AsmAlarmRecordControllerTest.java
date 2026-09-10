@@ -39,6 +39,8 @@ import static org.mockito.Mockito.withSettings;
  * 行追加 ruoyi 化契约字段：device_label/attr_label（mock registry 解析+回退）、
  * trigger_time（=start_time）/recover_time（=end_time）/duration_ms（活跃行 null），
  * 序列化平铺契约（旧字段路径不变 + snake_case 新键、无 record 包裹层）。
+ *
+ * @author coffee
  */
 @ExtendWith(MockitoExtension.class)
 class AsmAlarmRecordControllerTest {

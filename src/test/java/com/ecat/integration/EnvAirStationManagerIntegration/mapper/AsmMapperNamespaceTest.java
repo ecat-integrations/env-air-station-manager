@@ -33,6 +33,8 @@ import static org.junit.jupiter.api.Assertions.fail;
  * <p><b>非 BaseEntity 实体护栏</b>：ASM 全部 domain 实体故意不继承 BaseEntity（DynamicJarLoader 只对
  * domain/ + extends BaseEntity 注册短别名），本测试不注册任何短别名——xml 须全用 FQCN，误退短别名
  * parse() 即抛红测。</p>
+ *
+ * @author coffee
  */
 class AsmMapperNamespaceTest {
 

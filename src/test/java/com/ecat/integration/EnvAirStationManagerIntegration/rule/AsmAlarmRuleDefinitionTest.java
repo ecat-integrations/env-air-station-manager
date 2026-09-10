@@ -12,6 +12,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
  * 规则行 → 解析后规则定义（坏配置解析期抛明确异常，由索引层隔离跳过）。
+ *
+ * @author coffee
  */
 class AsmAlarmRuleDefinitionTest {
 

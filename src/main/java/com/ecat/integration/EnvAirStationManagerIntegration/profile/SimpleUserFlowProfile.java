@@ -12,6 +12,8 @@ import java.util.Map;
  * 不同，故用单值类 + {@code StationProfileRegistrar} 集中注册（区别 ADM 逐型号独立类——ASM 侧
  * 各集成身份步模板尚未逐型号精化，identityInputs 先空 Map：driver 自动跳过无 required 的欢迎/说明步、
  * 停在首个含 required 字段的身份/连接步交用户填写；逐型号补 hydrate 默认值时在此填 Map 即可）。
+ *
+ * @author coffee
  */
 @Value
 @Builder

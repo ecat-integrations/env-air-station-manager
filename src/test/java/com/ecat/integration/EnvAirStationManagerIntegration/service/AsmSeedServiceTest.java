@@ -40,6 +40,8 @@ import static org.mockito.Mockito.when;
  *
  * <p>LogicDevice 用 Mockito class-mock（Objenesis 绕过构造，只 stub getUniqueId/getAttrs 两个读取面）。
  * 无 sleep 全同步。</p>
+ *
+ * @author coffee
  */
 @ExtendWith(MockitoExtension.class)
 class AsmSeedServiceTest {

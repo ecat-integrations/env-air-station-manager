@@ -47,6 +47,8 @@ import javax.annotation.PreDestroy;
  *
  * <p><b>Bean 注册</b>：{@code @Service}——DynamicJarLoader 只扫 @RestController/@Service（ASM 动态 jar
  * 单例铁律，@Component 静默跳过）。</p>
+ *
+ * @author coffee
  */
 @Slf4j
 @Service

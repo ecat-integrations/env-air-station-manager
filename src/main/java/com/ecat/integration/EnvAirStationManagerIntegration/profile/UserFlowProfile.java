@@ -9,6 +9,8 @@ import java.util.Map;
  * device_protocol 等）预填进 flow 对应步。{@link #getIdentityInputs()} 即 hydrate 默认值映射
  * {@code Map<stepId, Map<field, value>>}。sn/name 属用户专属，不入此 Map——driver 见 schema
  * required 但 profile 未给的字段即停步交 flow-form 让用户补全。
+ *
+ * @author coffee
  */
 public interface UserFlowProfile extends StationProvisionProfile {
 

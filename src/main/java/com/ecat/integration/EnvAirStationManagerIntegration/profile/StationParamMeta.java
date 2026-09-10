@@ -16,6 +16,8 @@ import com.ecat.integration.logicdevice.Meta.DeviceType;
  * MULTI_INSTANCE_SUFFIXES（PM_ZERO_CHECK/CUTTER_CHANGER/PAPER_TAPE=pm10,pm25；
  * AIR_CONDITIONER=ac1,ac2；STANDARD_GAS=so2,co,nox；FILTER_CHANGER=so2,co,o3,nox；
  * CAMERA=1..4；VALVE_GROUP=so2,co,no,o3）。
+ *
+ * @author coffee
  */
 public enum StationParamMeta {
 

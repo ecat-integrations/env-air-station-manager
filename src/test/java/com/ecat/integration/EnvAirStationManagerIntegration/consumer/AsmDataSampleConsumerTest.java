@@ -39,6 +39,8 @@ import static org.mockito.Mockito.when;
  * ASM raw 落库 consumer 单测——同包直接调 flush(List)（手动批触发，无 sleep，worker 线程不参与）：
  * airstation 过滤（uid 前缀）/ 数值文本分槽 / 首见统计准入 series（numeric 或白名单文本）触发 seed
  * （二次 flush 不重复）/ 空批不调 mapper。
+ *
+ * @author coffee
  */
 @ExtendWith(MockitoExtension.class)
 class AsmDataSampleConsumerTest {

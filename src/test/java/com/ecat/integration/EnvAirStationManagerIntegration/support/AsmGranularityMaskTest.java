@@ -9,6 +9,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * AsmGranularityMask 单测——位定义 / isApplicable 过滤 / validate 严格拒绝脏掩码。
+ *
+ * @author coffee
  */
 class AsmGranularityMaskTest {
 

@@ -20,6 +20,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *
  * <p>排序键 = displayName（中文 Collator，null 回退 attrId 字典序）；unit 模式对齐 ADM：
  * custom→MONITOR 偏好 / 其余（standard/缺省/旧值）→STANDARD 行。禁 sleep 全同步。</p>
+ *
+ * @author coffee
  */
 class AsmSnapshotOrderAndUnitModeTest {
 

@@ -24,6 +24,8 @@ import static org.junit.jupiter.api.Assertions.fail;
  * 转义合法）这一层，不需要 MyBatis Configuration 语义；DOM 解析对每个文件独立报错，能逐文件
  * 指认破坏点，且不依赖 mapper 接口注册顺序。文件集经文件系统扫描自动纳管（新增 mapper xml
  * 免改本测试）。</p>
+ *
+ * @author coffee
  */
 class AsmMapperXmlWellFormedTest {
 

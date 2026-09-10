@@ -12,6 +12,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * 控制审计 mapper SQL 形状护栏——不连 DB：insert 全列落 PENDING 行（useGeneratedKeys 回填 id）、
  * updateResult 只回填 result/after_value/error/duration_ms（先落后补的审计契约）。
+ *
+ * @author coffee
  */
 class AsmControlRecordMapperSqlShapeTest {
 

@@ -16,6 +16,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * 三类判定 + 去重窗口 + 断电恢复 + 坏规则运行时隔离。时间源注入 MutableClock（禁 sleep）。
+ *
+ * @author coffee
  */
 class AsmAlarmRuleEvaluatorTest {
 

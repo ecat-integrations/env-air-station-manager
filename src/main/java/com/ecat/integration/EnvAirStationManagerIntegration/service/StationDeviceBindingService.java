@@ -51,6 +51,8 @@ import java.util.Set;
  * </ul>
  *
  * <p>线程：DeviceRegistry 非线程安全，写操作按 ADM 同款方法级 synchronized 串行化。
+ *
+ * @author coffee
  */
 @Slf4j
 @Service

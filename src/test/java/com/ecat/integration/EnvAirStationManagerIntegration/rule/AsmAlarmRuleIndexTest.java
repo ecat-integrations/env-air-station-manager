@@ -18,6 +18,8 @@ import static org.mockito.Mockito.when;
 
 /**
  * 规则索引：复合 key（uid→attrId→rules 嵌套 Map，禁字符串拼接碰撞）+ 坏配置隔离 + 热加载重建。
+ *
+ * @author coffee
  */
 @ExtendWith(MockitoExtension.class)
 class AsmAlarmRuleIndexTest {

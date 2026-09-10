@@ -13,6 +13,8 @@ import lombok.RequiredArgsConstructor;
  * FlowDriver 驱动步序：{@code select_type}(device_type[+device_instance]→设 uniqueId) →
  * {@code attribute_mapping}(mapping.{attrId}=phyId，driver 动态读 schema 填) →
  * {@code final_confirm}(confirmed=true→CREATE_ENTRY)。
+ *
+ * @author coffee
  */
 @RequiredArgsConstructor
 public class StationLogicDeviceProfile {

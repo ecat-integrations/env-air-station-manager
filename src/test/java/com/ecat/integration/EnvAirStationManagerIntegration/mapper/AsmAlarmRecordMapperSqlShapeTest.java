@@ -14,6 +14,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * episode 区间重叠谓词（左开右闭窗）逐片段锁定，{@code selectTypeCatalog} 的目录投影列锁定。
  *
  * <p>窗口语义是 SDK 对外契约（跨窗连续查询无缝无重），SQL 锚点漂移即契约破坏，故以文本断言锁死。</p>
+ *
+ * @author coffee
  */
 class AsmAlarmRecordMapperSqlShapeTest {
 

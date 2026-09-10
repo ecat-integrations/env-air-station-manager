@@ -33,6 +33,8 @@ import static org.mockito.Mockito.when;
 /**
  * 报警心跳 sweep 调度器 TDD：窗口外闭单摘槽 / 窗口内不闭 / 单轮失败吞保连续。mock mapper + 注入
  * executor（手动触发，禁 sleep）；doSweep 传显式 now（虚拟时钟语义）。
+ *
+ * @author coffee
  */
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)

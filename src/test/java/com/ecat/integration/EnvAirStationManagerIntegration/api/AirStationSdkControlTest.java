@@ -22,6 +22,8 @@ import static org.mockito.Mockito.when;
 /**
  * SDK 控制出口：origin=LOCAL、caller 透传消费方集成坐标、DTO 映射（记录 id/result）。
  * 与 REST 路同收口 AsmControlService（origin 双路同源验证）。
+ *
+ * @author coffee
  */
 @ExtendWith(MockitoExtension.class)
 class AirStationSdkControlTest {

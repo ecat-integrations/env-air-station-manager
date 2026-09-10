@@ -29,6 +29,8 @@ import static org.mockito.Mockito.withSettings;
 /**
  * 配置端点：GET 读 / PUT 写透传 service 收口（校验+invalidate 在 service 层），operator=认证 principal。
  * config-stat 行追加 device_label/attr_label（mock registry 解析，口径与 alarm-record 行同源）。
+ *
+ * @author coffee
  */
 @ExtendWith(MockitoExtension.class)
 class AsmConfigControllerTest {

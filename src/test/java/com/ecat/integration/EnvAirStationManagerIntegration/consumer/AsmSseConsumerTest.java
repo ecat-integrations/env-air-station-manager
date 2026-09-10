@@ -47,6 +47,8 @@ import static org.mockito.Mockito.when;
 /**
  * AsmSseConsumer 单测——事件 payload 组装（displayName/单位符号/状态中文/值换算出口）+ 站房过滤 +
  * 零连接短路。确定性同步：latch 等 broadcast 被调（禁 sleep）。
+ *
+ * @author coffee
  */
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)

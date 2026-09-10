@@ -37,6 +37,8 @@ import static org.mockito.Mockito.when;
  * ASM avg-only 聚合引擎单测——minute←raw 窗口均值 / 级联按 valid_count 加权（非 mean-of-means）/
  * mask 门控 / mode 门控（FRONT-only 不产 BACK 行）/ 幂等 upsert / compute_log 行 / enabled 过滤 /
  * 全 series 失败记 FAILED 审计并上抛。JdbcTemplate mock 取数（聚合全在 Java），无 DB 无 sleep。
+ *
+ * @author coffee
  */
 @ExtendWith(MockitoExtension.class)
 class AsmStatAggregationEngineTest {

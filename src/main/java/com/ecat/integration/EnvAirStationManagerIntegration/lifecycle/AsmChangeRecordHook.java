@@ -10,6 +10,8 @@ import java.util.List;
  * ASM 站房设备变更追溯钩子（复刻 ADM AdmChangeRecordHook）。5 事件
  * （FIRST_BIND/REBIND/REPLACE/UNBIND/RECONFIGURE），attr 级粒度，append-only 落
  * {@code asm_device_change_record}。由装配层注入 {@code StationDeviceBindingService}。
+ *
+ * @author coffee
  */
 public class AsmChangeRecordHook {
 

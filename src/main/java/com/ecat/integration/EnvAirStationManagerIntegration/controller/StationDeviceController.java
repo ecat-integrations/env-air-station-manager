@@ -27,6 +27,8 @@ import java.util.Map;
  * <p><b>鉴权</b>（逐方法 {@link PreAuthorize}）：读类（params/vendors/deviceDetail/devices）→
  * {@code asm-monitor:device:list}；写类（provision/submit/previous/unbind/reconfigure/bind/replace）→
  * {@code asm-monitor:device:edit}。sys_menu 权限行见 {@code resources/sql/asm_auth.sql}（幂等 DO 块）。
+ *
+ * @author coffee
  */
 @RestController
 @RequestMapping("/asm-monitor/device")

@@ -7,6 +7,8 @@ package com.ecat.integration.EnvAirStationManagerIntegration.profile;
  * profile 拼 import data 串 → driver 调 {@code startDiscoveryFlow(coordinate, IMPORT_FLOW, payload)}，
  * 集成自校验 class/model/SN + 自预填 entryData + 直达连接配置步。import data 格式由集成自定义：
  * saimosen v1 = {@code class|model|sn|name}。
+ *
+ * @author coffee
  */
 public interface ImportFlowProfile extends StationProvisionProfile {
 

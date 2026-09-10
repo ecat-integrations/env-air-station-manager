@@ -33,6 +33,8 @@ import java.util.Map;
  * statusName=主状态中文名（AttributeStatus.getDescription）。</p>
  *
  * <p><b>零在线连接短路</b>：broadcaster.activeCount()==0 直接返回，跳过序列化（无前端时不空转）。</p>
+ *
+ * @author coffee
  */
 @Slf4j
 public class AsmSseConsumer extends AbstractBusConsumer<DeviceDataChangedEvent> {

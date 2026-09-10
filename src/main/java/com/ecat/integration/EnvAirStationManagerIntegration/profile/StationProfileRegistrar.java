@@ -14,6 +14,8 @@ import java.util.Map;
  * 停首 required 步交用户）——与 ADM 现状一致：ADM 对 saimosen 全家族（SMS8200/8300/8400/8500）
  * 已于 2026-07-27 由 IMPORT_FLOW 改 USER_FLOW，saimosen 集成侧 IMPORT_FLOW 发现入口已移除
  * （其 discovery 绕过 web schema 预填 entryData，不适合经管理集成调用），ASM 不切 IMPORT_FLOW。
+ *
+ * @author coffee
  */
 public final class StationProfileRegistrar {
 

@@ -10,6 +10,8 @@ package com.ecat.integration.EnvAirStationManagerIntegration.profile;
  *   <li>{@link #USER_FLOW}：集成仅/优先走 USER config flow（无 IMPORT_FLOW handler）。
  *       driver 启动 USER flow，按 profile 身份步模板快进身份步、自动跳过欢迎/说明步、停连接步。</li>
  * </ul>
+ *
+ * @author coffee
  */
 public enum ProvisionStrategy {
     IMPORT_FLOW,

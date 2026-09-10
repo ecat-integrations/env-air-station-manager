@@ -42,6 +42,8 @@ import static org.mockito.Mockito.lenient;
  * snapshot 设备级 alarm 字段（P2）TDD：两源并集（registry 活跃 episode ∪ ALARM_STATUS 类 attr 自报）
  * + 选项 key 判定（非 i18n 文案）。真实 registry+bus 事件链注册站房设备（同 AirStationSdkAssemblyTest
  * 模式），禁 sleep 全同步。
+ *
+ * @author coffee
  */
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)

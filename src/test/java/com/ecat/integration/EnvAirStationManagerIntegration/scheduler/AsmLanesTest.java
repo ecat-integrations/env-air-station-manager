@@ -35,6 +35,8 @@ import static org.mockito.Mockito.when;
  * （显式 bind → core biz 池；无 core 且未 bind 显式抛——本地兜底双轨已删）。
  * 计时行为经 mock ScheduledExecutorService 捕获 + 真实 bounded 道驱动，断言的是
  * 「计时注册 + 投递经道」这一接线前提，非猜测。
+ *
+ * @author coffee
  */
 @ExtendWith(MockitoExtension.class)
 class AsmLanesTest {
