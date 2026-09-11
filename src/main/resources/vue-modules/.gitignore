@@ -4,5 +4,7 @@ air-station-manager/.index.js
 # 依赖锁定文件不入库（同 ADM 惯例）
 package-lock.json
 
+!static/lib/config-flow/dist/
+
 # e2e/构建副产物不入库
 test-results/
