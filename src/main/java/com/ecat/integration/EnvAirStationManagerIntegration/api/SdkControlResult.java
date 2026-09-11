@@ -17,7 +17,7 @@ public class SdkControlResult {
     /** 审计记录 id（asm_control_record 主键）。 */
     private final Long recordId;
 
-    /** LOCAL（SDK 路固定）。 */
+    /** 回显请求 origin（LOCAL=本站/集成自身发起；REMOTE=第三方代传远程侧指令）。 */
     private final String origin;
 
     /** PENDING|SUCCESS|FAILED|TIMEOUT。 */

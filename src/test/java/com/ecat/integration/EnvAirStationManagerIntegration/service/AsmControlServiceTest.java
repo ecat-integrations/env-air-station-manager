@@ -4,6 +4,7 @@ import com.ecat.core.State.AttributeClass;
 import com.ecat.core.State.AttributeStatus;
 import com.ecat.core.State.AttrState;
 import com.ecat.core.State.NumberAttribute;
+import com.ecat.core.State.Unit.AirMassUnit;
 import com.ecat.core.State.Unit.TemperatureUnit;
 import com.ecat.core.State.UnitInfo;
 import com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmControlRecord;
@@ -50,7 +51,8 @@ import static org.mockito.Mockito.when;
 /**
  * 控制服务单测——手动驱动 executor / 超时调度器 / 时钟（零 sleep，确定性时序）：
  * PENDING 先落 → 执行回填 SUCCESS/FAILED；超时回填 TIMEOUT 且迟到执行不双写；
- * before/after 取真实 AttrState（builder 构造，禁 mock final）；非法入参/不可写明确抛。
+ * before/after 取真实 AttrState（builder 构造，禁 mock final）；非法入参/不可写明确抛；
+ * 带单位写分支（fromUnit 决定写入口 + requestedValue 留痕 + 跨量纲异步 FAILED）。
  *
  * @author coffee
  */
@@ -65,12 +67,23 @@ class AsmControlServiceTest {
 
         private AttrState<?> state;
         final WriteBehavior behavior;
+        /** 非 null 时带单位写入口走它（缺省走 super=真实换算链）；专测「service 落哪个写入口」。 */
+        private WriteBehavior unitBehavior;
+        /** 最近一次带单位写入口收到的单位；null=该入口从未被调。 */
+        UnitInfo lastUnitArg;
+        /** 单参写入口是否被调过（unit 分支回归锁：无单位必须走单参现状语义）。 */
+        boolean singleArgCalled;
 
         WritableAttr(String attrId, boolean changeable, AttrState<?> initial, WriteBehavior behavior) {
             super(attrId, AttributeClass.TEMPERATURE, TemperatureUnit.CELSIUS, TemperatureUnit.CELSIUS,
                     1, false, changeable);
             this.state = initial;
             this.behavior = behavior;
+        }
+
+        WritableAttr onUnitWrite(WriteBehavior unitBehavior) {
+            this.unitBehavior = unitBehavior;
+            return this;
         }
 
         @Override
@@ -80,7 +93,17 @@ class AsmControlServiceTest {
 
         @Override
         public CompletableFuture<Boolean> setDisplayValue(String newDisplayValue) {
+            singleArgCalled = true;
             return behavior.write(newDisplayValue, this);
+        }
+
+        @Override
+        public CompletableFuture<Boolean> setDisplayValue(String newDisplayValue, UnitInfo fromUnit) {
+            if (unitBehavior == null) {
+                return super.setDisplayValue(newDisplayValue, fromUnit);
+            }
+            lastUnitArg = fromUnit;
+            return unitBehavior.write(newDisplayValue, this);
         }
 
         @SuppressWarnings("unchecked")
@@ -212,7 +235,7 @@ class AsmControlServiceTest {
         when(stationDevice.getAttrs()).thenReturn(attrs(attr));
 
         AsmControlRecord rec = service.execute(AsmControlOrigin.LOCAL, "consumer-x",
-                "logicdevice_station.th", "temperature", "30.0");
+                "logicdevice_station.th", "temperature", "30.0", null);
 
         assertEquals(77L, rec.getId());
         assertEquals(AsmControlResult.PENDING, rec.getResult());
@@ -245,7 +268,7 @@ class AsmControlServiceTest {
         when(stationDevice.getAttrs()).thenReturn(attrs(attr));
 
         AsmControlRecord rec = service.execute(AsmControlOrigin.REMOTE, "admin",
-                "logicdevice_station.th", "temperature", "26.0");
+                "logicdevice_station.th", "temperature", "26.0", null);
         executor.runAll();
 
         assertEquals(AsmControlOrigin.REMOTE, rec.getOrigin());
@@ -267,7 +290,7 @@ class AsmControlServiceTest {
         when(stationDevice.getAttrs()).thenReturn(attrs(attr));
 
         AsmControlRecord rec = service.execute(AsmControlOrigin.LOCAL, "asm-alarm",
-                "logicdevice_station.th", "temperature", "30.0");
+                "logicdevice_station.th", "temperature", "30.0", null);
         executor.runAll();
 
         assertEquals(AsmControlResult.FAILED, rec.getResult());
@@ -283,7 +306,7 @@ class AsmControlServiceTest {
         when(stationDevice.getAttrs()).thenReturn(attrs(attr));
 
         service.execute(AsmControlOrigin.LOCAL, "asm-alarm",
-                "logicdevice_station.th", "temperature", "30.0");
+                "logicdevice_station.th", "temperature", "30.0", null);
         executor.runAll();
 
         ArgumentCaptor<AsmControlRecord> cap = ArgumentCaptor.forClass(AsmControlRecord.class);
@@ -301,7 +324,7 @@ class AsmControlServiceTest {
         when(stationDevice.getAttrs()).thenReturn(attrs(attr));
 
         service.execute(AsmControlOrigin.LOCAL, "asm-alarm",
-                "logicdevice_station.th", "temperature", "30.0");
+                "logicdevice_station.th", "temperature", "30.0", null);
         executor.runAll();
 
         ArgumentCaptor<AsmControlRecord> cap = ArgumentCaptor.forClass(AsmControlRecord.class);
@@ -319,7 +342,7 @@ class AsmControlServiceTest {
         when(stationDevice.getAttrs()).thenReturn(attrs(attr));
 
         service.execute(AsmControlOrigin.REMOTE, "admin", "logicdevice_station.th",
-                "temperature", "30.0");
+                "temperature", "30.0", null);
         executor.runAll();
 
         verify(broadcaster).broadcastNamed(eq(AsmControlCompletedEvent.TYPE), contains("\"id\":11"));
@@ -339,7 +362,7 @@ class AsmControlServiceTest {
         when(stationDevice.getAttrs()).thenReturn(attrs(attr));
 
         service.execute(AsmControlOrigin.REMOTE, "admin", "logicdevice_station.th",
-                "temperature", "30.0");
+                "temperature", "30.0", null);
         timeoutScheduler.fireAll();
 
         verify(broadcaster).broadcastNamed(eq(AsmControlCompletedEvent.TYPE), contains("\"result\":\"TIMEOUT\""));
@@ -356,7 +379,7 @@ class AsmControlServiceTest {
         when(stationDevice.getAttrs()).thenReturn(attrs(attr));
 
         AsmControlRecord rec = service.execute(AsmControlOrigin.REMOTE, "admin",
-                "logicdevice_station.th", "temperature", "30.0");
+                "logicdevice_station.th", "temperature", "30.0", null);
         executor.runAll();   // 广播抛异常被吞（尽力而为通道），审计终态照常回填
 
         assertEquals(AsmControlResult.SUCCESS, rec.getResult());
@@ -370,7 +393,7 @@ class AsmControlServiceTest {
         when(stationDevice.getAttrs()).thenReturn(attrs(attr));
 
         service.execute(AsmControlOrigin.REMOTE, "admin", "logicdevice_station.th",
-                "temperature", "30.0");   // 不跑 executor——PENDING 阶段零帧
+                "temperature", "30.0", null);   // 不跑 executor——PENDING 阶段零帧
 
         verify(broadcaster, never()).broadcastNamed(anyString(), anyString());
     }
@@ -385,7 +408,7 @@ class AsmControlServiceTest {
         when(stationDevice.getAttrs()).thenReturn(attrs(attr));
 
         AsmControlRecord rec = service.execute(AsmControlOrigin.LOCAL, "asm-alarm",
-                "logicdevice_station.th", "temperature", "30.0");
+                "logicdevice_station.th", "temperature", "30.0", null);
         // 不跑 executor，直接触发超时
         clock.advance(TIMEOUT);
         timeoutScheduler.fireAll();
@@ -406,33 +429,33 @@ class AsmControlServiceTest {
     @Test
     void execute_blankCallerRejected() {
         assertThrows(IllegalArgumentException.class, () -> service.execute(AsmControlOrigin.LOCAL, " ",
-                "logicdevice_station.th", "temperature", "30.0"));
+                "logicdevice_station.th", "temperature", "30.0", null));
         verify(recordMapper, never()).insert(any(AsmControlRecord.class));
     }
 
     @Test
     void execute_nullOriginRejected() {
         assertThrows(IllegalArgumentException.class, () -> service.execute(null, "caller",
-                "logicdevice_station.th", "temperature", "30.0"));
+                "logicdevice_station.th", "temperature", "30.0", null));
     }
 
     @Test
     void execute_nonStationUidRejected() {
         assertThrows(IllegalArgumentException.class, () -> service.execute(AsmControlOrigin.LOCAL, "caller",
-                "logicdevice_adm.analyzer", "temperature", "30.0"));
+                "logicdevice_adm.analyzer", "temperature", "30.0", null));
     }
 
     @Test
     void execute_unknownDeviceRejected() {
         assertThrows(IllegalArgumentException.class, () -> service.execute(AsmControlOrigin.LOCAL, "caller",
-                "logicdevice_station.nope", "temperature", "30.0"));
+                "logicdevice_station.nope", "temperature", "30.0", null));
     }
 
     @Test
     void execute_unknownAttrRejected() {
         when(stationDevice.getAttrs()).thenReturn(attrs());
         assertThrows(IllegalArgumentException.class, () -> service.execute(AsmControlOrigin.LOCAL, "caller",
-                "logicdevice_station.th", "temperature", "30.0"));
+                "logicdevice_station.th", "temperature", "30.0", null));
     }
 
     @Test
@@ -442,14 +465,99 @@ class AsmControlServiceTest {
                 state("25.5", TemperatureUnit.CELSIUS), (v, self) -> CompletableFuture.completedFuture(true));
         when(stationDevice.getAttrs()).thenReturn(attrs(readonly));
         assertThrows(IllegalStateException.class, () -> service.execute(AsmControlOrigin.LOCAL, "caller",
-                "logicdevice_station.th", "temperature", "30.0"));
+                "logicdevice_station.th", "temperature", "30.0", null));
         verify(recordMapper, never()).insert(any(AsmControlRecord.class));
     }
 
     @Test
     void execute_blankValueRejected() {
         assertThrows(IllegalArgumentException.class, () -> service.execute(AsmControlOrigin.LOCAL, "caller",
-                "logicdevice_station.th", "temperature", " "));
+                "logicdevice_station.th", "temperature", " ", null));
+    }
+
+    // ===== 带单位写分支：fromUnit 决定落哪个写入口 + requestedValue 留痕口径 =====
+
+    @Test
+    void execute_withUnit_writesThroughUnitEntryAndStampsRequestedValue() {
+        stubInsertWithId(31L);
+        WritableAttr attr = okAttr("temperature", "25.5").onUnitWrite((v, self) -> {
+            self.setState(state(v, TemperatureUnit.CELSIUS));
+            return CompletableFuture.completedFuture(true);
+        });
+        when(stationDevice.getAttrs()).thenReturn(attrs(attr));
+
+        AsmControlRecord rec = service.execute(AsmControlOrigin.LOCAL, "com.ecat:integration-x",
+                "logicdevice_station.th", "temperature", "26.5", TemperatureUnit.CELSIUS);
+        executor.runAll();
+
+        assertEquals(TemperatureUnit.CELSIUS, attr.lastUnitArg, "须落带单位写入口且单位原样透传");
+        assertEquals("26.5 " + TemperatureUnit.CELSIUS.getFullUnitString(), rec.getRequestedValue(),
+                "留痕=值 + 空格 + 单位 full string（非 toString 符号）");
+        assertEquals(AsmControlResult.SUCCESS, rec.getResult());
+    }
+
+    @Test
+    void execute_withoutUnit_writesThroughSingleArgEntryAndKeepsRawRequestedValue() {
+        stubInsertWithId(32L);
+        WritableAttr attr = okAttr("temperature", "25.5").onUnitWrite((v, self) -> {
+            self.setState(state(v, TemperatureUnit.CELSIUS));
+            return CompletableFuture.completedFuture(true);
+        });
+        when(stationDevice.getAttrs()).thenReturn(attrs(attr));
+
+        AsmControlRecord rec = service.execute(AsmControlOrigin.LOCAL, "com.ecat:integration-x",
+                "logicdevice_station.th", "temperature", "26.5", null);
+        executor.runAll();
+
+        assertNull(attr.lastUnitArg, "无单位请求不得走带单位写入口");
+        assertTrue(attr.singleArgCalled, "无单位请求=按属性默认单位写入（现状语义）");
+        assertEquals("26.5", rec.getRequestedValue(), "不带单位留痕=值原文（与历史行同形态）");
+    }
+
+    @Test
+    void execute_unitConversionFailure_isAsyncFailedNotSubmitRejection() {
+        // unit 是合法 full string、但与属性量纲不同 → 提交照常受理（审计行先落），执行期 FAILED 留痕
+        stubInsertWithId(33L);
+        WritableAttr attr = okAttr("temperature", "25.5").onUnitWrite((v, self) -> {
+            CompletableFuture<Boolean> f = new CompletableFuture<>();
+            f.completeExceptionally(
+                    new IllegalArgumentException("Cannot convert between different unit classes"));
+            return f;
+        });
+        when(stationDevice.getAttrs()).thenReturn(attrs(attr));
+
+        AsmControlRecord rec = service.execute(AsmControlOrigin.LOCAL, "com.ecat:integration-x",
+                "logicdevice_station.th", "temperature", "30.0", AirMassUnit.UGM3);
+        assertEquals(AsmControlResult.PENDING, rec.getResult(), "跨量纲不是提交拒绝，受理后异步定案");
+        verify(recordMapper).insert(any(AsmControlRecord.class));
+
+        executor.runAll();
+        assertEquals(AsmControlResult.FAILED, rec.getResult());
+        assertTrue(rec.getError().contains("unit classes"), "error 须留换算失败原因: " + rec.getError());
+        assertEquals("30.0 " + AirMassUnit.UGM3.getFullUnitString(), rec.getRequestedValue());
+    }
+
+    // ===== parseFromUnit：SDK/REST 共用解析（null/空白=nullUnit；非空=full string；符号拒绝）=====
+
+    @Test
+    void parseFromUnit_nullAndBlankMeanNoUnit() {
+        assertNull(AsmControlService.parseFromUnit(null));
+        assertNull(AsmControlService.parseFromUnit(""));
+        assertNull(AsmControlService.parseFromUnit("  "));
+    }
+
+    @Test
+    void parseFromUnit_fullStringResolvesToCoreUnitInstance() {
+        assertEquals(TemperatureUnit.CELSIUS, AsmControlService.parseFromUnit("TemperatureUnit.CELSIUS"));
+        assertEquals(TemperatureUnit.CELSIUS, AsmControlService.parseFromUnit(" TemperatureUnit.CELSIUS "));
+    }
+
+    @Test
+    void parseFromUnit_symbolOrGarbageRejectedWithGuidance() {
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> AsmControlService.parseFromUnit("°C"));
+        assertTrue(e.getMessage().contains("TemperatureUnit.CELSIUS"), "拒绝消息须给合法格式: " + e.getMessage());
+        assertThrows(IllegalArgumentException.class, () -> AsmControlService.parseFromUnit("TemperatureUnit.NOPE"));
     }
 
     private static Map<String, com.ecat.core.State.AttributeBase<?>> attrs(

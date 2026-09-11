@@ -1,5 +1,6 @@
 package com.ecat.integration.EnvAirStationManagerIntegration.controller;
 
+import com.ecat.core.State.UnitInfo;
 import com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmControlRecord;
 import com.ecat.integration.EnvAirStationManagerIntegration.mapper.AsmControlRecordMapper;
 import com.ecat.integration.EnvAirStationManagerIntegration.service.AsmControlService;
@@ -17,8 +18,9 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * REMOTE 控制入口（{@code POST /asm-monitor/control}）——caller 取认证 principal，
- * 汇入 {@link AsmControlService}（与 SDK LOCAL 路同收口，全程落 asm_control_record 审计）。
+ * 本站 web 控制入口（{@code POST /asm-monitor/control}）——caller 取认证 principal，origin=LOCAL
+ * （本站页面操作属「本站自身发起」，非第三方代传；第三方远程指令由消费方集成经 SDK 以 REMOTE 声明），
+ * 汇入 {@link AsmControlService} 统一收口，全程落 asm_control_record 审计。
  * 响应含审计记录 id + 当前 result（异步执行则 PENDING，终态按 id 回查）。
  *
  * @author coffee
@@ -31,11 +33,13 @@ public class AsmControlController extends BaseController {
     private final AsmControlService controlService;
     private final AsmControlRecordMapper recordMapper;
 
-    /** 控制请求体（uid/attrId/value）。 */
+    /** 控制请求体（uid/attrId/value/unit；unit 可选，缺省/空串=按属性默认单位写入=向后兼容）。 */
     public static class AsmControlRequest {
         private String uid;
         private String attrId;
         private String value;
+        /** 请求值单位 full string（如 TemperatureUnit.CELSIUS）；缺省/空串/显式 null=不指定单位（按属性默认单位）。 */
+        private String unit = "";
 
         public AsmControlRequest() {
         }
@@ -69,9 +73,17 @@ public class AsmControlController extends BaseController {
         public void setValue(String value) {
             this.value = value;
         }
+
+        public String getUnit() {
+            return unit;
+        }
+
+        public void setUnit(String unit) {
+            this.unit = unit;
+        }
     }
 
-    /** REMOTE 控制（caller=认证 principal；origin=REMOTE）。 */
+    /** 本站 web 控制（caller=认证 principal；origin=LOCAL）。 */
     @PreAuthorize("@ss.hasPermi('asm-monitor:control:execute')")
     @PostMapping
     public AjaxResult execute(@RequestBody AsmControlRequest request) {
@@ -83,8 +95,10 @@ public class AsmControlController extends BaseController {
         if (request == null) {
             throw new IllegalArgumentException("控制请求体为空");
         }
-        AsmControlRecord record = controlService.execute(AsmControlOrigin.REMOTE, caller,
-                request.getUid(), request.getAttrId(), request.getValue());
+        // unit 缺省/空串=不指定单位（向后兼容：存量调用方不带 unit 字段行为不变）；非法 full string 400 拒绝
+        UnitInfo fromUnit = AsmControlService.parseFromUnit(request.getUnit());
+        AsmControlRecord record = controlService.execute(AsmControlOrigin.LOCAL, caller,
+                request.getUid(), request.getAttrId(), request.getValue(), fromUnit);
         return AjaxResult.success(record);
     }
 

@@ -10,7 +10,7 @@
 | 三级聚合 | minute/5min/hour 级联：数值=加权均值（非均值再均值）；非数值 bind attr（白名单 16 项，`AsmStatSeriesKindClassifier` 真相源）=ALARM（minute 窗口任一报警→alarm / 5min 点采样 / hour 全窗任一报警）与 STATE（minute 距桶标最近样本 / 5min·hour 点采样）两口径，落 `value_text` 与 avg_value 互斥；FRONT=[S,E)/BACK=(L,R] 双标物化（HJ663 口径），按 series 可配。规则真相源 `docs/stat-series-rules.md` |
 | 历史查询 | REST 按粒度/mode/参数/时间窗查询 + 单位偏好出口（换算，缺行显原生） |
 | 动环报警 | seed 规则（温湿度/供电/漏水/门禁/标气泄漏等 16 类，报警标识语义化 snake_case 如 `water_leak`/`room_temp_abnormal`），range+持续 / 瞬时阈值 / 状态串三类判定，热加载、报警联动（如泄漏→开排风扇） |
-| 控制审计 | 统一控制收口（REST=REMOTE / SDK=LOCAL 双入口），`asm_control_record` 记录调用方、执行前后值、终态（PENDING→SUCCESS/FAILED/TIMEOUT） |
+| 控制审计 | 统一控制收口（origin 由各入口声明：本站 web/报警联动=LOCAL，第三方代传=REMOTE），`asm_control_record` 记录来源、调用方、执行前后值、终态（PENDING→SUCCESS/FAILED/TIMEOUT） |
 | 设备控制页 | 总览抽屉入口 → `device_control`：DM 配置驱动的 7 台可控设备 card 墙，批量确认/撤销 + 串行逐 attr 提交，终态 SSE 流式回显（无轮询） |
 | 对外 SDK | `AirStationSdk`（api 包零依赖），其他集成进程内取用查询/报警/控制能力 |
 
@@ -71,7 +71,7 @@ DDL 手动 apply（无自动迁移）：`src/main/resources/sql/asm_data.sql`（
 | `GET /history` | granularity / params / mode / unit / start / end / 分页；行含 `value`（数值均值）与 `value_text`（非数值统计值，互斥） |
 | `GET /stat-params` | 可查参数目录（SDK 同源） |
 | `/alarm-rule` CRUD、`GET /alarm-record/list?status=` | 报警规则（改后热加载；list 行含 `deviceLabels`[{slot,attrs}] 中文标注；写端点 alarmType 治理：重复 400「报警标识已存在」、预置规则（settingContent configurable!=true）标识禁改 400）与记录（状态过滤；行含 `device_label`/`attr_label`/`trigger_time`(=start_time)/`recover_time`(=end_time)/`duration_ms`(活跃行 null)；alarmType 为语义化标识如 `water_leak`/`intrusion`，合法值=seed 16 类+用户新建） |
-| `POST /control`、`GET /control-record/list`、`GET /control/{id}` | 控制下发（REMOTE）、审计查询、单条终态查询（仅 SSE 重连补偿用，非轮询通道） |
+| `POST /control`、`GET /control-record/list`、`GET /control/{id}` | 控制下发（本站 web，origin=LOCAL）、审计查询、单条终态查询（仅 SSE 重连补偿用，非轮询通道） |
 | `GET/PUT /config-stat`、`GET/PUT /config-unit` | 聚合配置（enabled/粒度掩码/物化 mode；GET 行含 `device_label`/`attr_label` 中文标注）与单位偏好（STANDARD 行由 seed 维护不开放写）；config-unit PUT 体含可空 `displayPrecision`（0-6，null=不覆盖），snapshot 数值行含 `unitKey`/`displayPrecision`/`unitOptions`（单位设置抽屉数据源） |
 
 ### 对外 SDK（跨集成消费方）
@@ -87,14 +87,17 @@ AirStationSdk sdk = ((EnvAirStationManagerIntegration) core.getIntegrationRegist
 //     连续分窗无缝无重），持续中 ACTIVE 行天然可查；行形状=前端报警表格列+alarmType 回显，
 //     deviceLabel/attrLabel 解析不到=null（回退归消费方）、durationMs 持续中=null
 // listStatParams() / listAlarmTypes()（报警标识目录）/ querySnapshot(uid)
-// control(uid, attrId, value, caller) —— origin=LOCAL，caller=消费方坐标（必填）
+// control(SdkControlRequest) —— 请求对象：origin 由调用方声明（LOCAL=本站/集成自身发起，
+//     caller=发起方集成坐标；REMOTE=第三方代传远程侧指令，caller=最终用户标识）；
+//     unit null 非法/空串=按属性默认单位/非空=full string「枚举类名.枚举常量名」（禁 °C 符号）；
+//     同步受理返 PENDING，终态 SUCCESS/FAILED/TIMEOUT 异步回填（可按 recordId 回查）
 ```
 
 消费方 maven 依赖本 jar（provided），只允许 import `api` 包（护栏测试强制：零 ruoyi/Spring/ecat-core 依赖）。**完整方法/DTO/横切语义手册：`docs/sdk.md`**。
 
 ## 测试与回归
 
-- **模块单测**：`mvnd clean test`（367 个，覆盖引擎（数值 avg + 非数值 ALARM/STATE）/规则/生命周期/在线判定/排序/SDK 全域）。
+- **模块单测**：`mvnd clean test`（398 个，覆盖引擎（数值 avg + 非数值 ALARM/STATE）/规则/生命周期/在线判定/排序/SDK 全域/控制请求校验与单位换算）
 - **浏览器回归（强制，API 冒烟不替代）**：Playwright 套件已移至 workspace `.claude/skills/ruoyi-e2e-test/skills/env-air-station-manager/e2e/`（2026-09-09 迁出本仓，入口与陷阱表见该目录 README 与 asm-e2e-test.md）——`npm run test:asm-e2e`（ro 只读组并行 / real 写操作组串行；g1-g13 分组脚本）。前置：core+8081 起且 vue 注入（globalSetup 自检）。
 - **DB 侧回归**：workspace ruoyi-e2e-test skill 的 `asm-regression.py`（bucket-check / idempotency / compute-log / alarm-check[episode 心跳断言] / control-check / linkage-check）。
 

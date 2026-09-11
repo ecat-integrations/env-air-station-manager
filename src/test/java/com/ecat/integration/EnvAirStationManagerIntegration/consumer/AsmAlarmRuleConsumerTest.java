@@ -177,7 +177,7 @@ class AsmAlarmRuleConsumerTest {
                 event("gas-dev", "co_concentration", "15")));
 
         verify(controlService).execute(AsmControlOrigin.LOCAL, "asm-alarm",
-                "logicdevice_station.exhaust_fan", "fan_speed", "high");
+                "logicdevice_station.exhaust_fan", "fan_speed", "high", null);
     }
 
     @Test
@@ -231,7 +231,7 @@ class AsmAlarmRuleConsumerTest {
         when(evaluator.evaluate("logicdevice_station.standard_gas.co", "co_concentration", "15", t))
                 .thenReturn(Collections.singletonList(fired));
         org.mockito.Mockito.doThrow(new IllegalArgumentException("未知站房逻辑设备"))
-                .when(controlService).execute(any(), any(), any(), any(), any());
+                .when(controlService).execute(any(), any(), any(), any(), any(), any());
 
         consumer.flush(Collections.singletonList(
                 event("gas-dev", "co_concentration", "15")));

@@ -11,6 +11,7 @@ import com.ecat.core.State.AttributeBase;
 import com.ecat.integration.EnvAirStationManagerIntegration.api.AirStationSdk;
 import com.ecat.integration.EnvAirStationManagerIntegration.api.AsmParamKey;
 import com.ecat.integration.EnvAirStationManagerIntegration.api.SdkAlarmEntry;
+import com.ecat.integration.EnvAirStationManagerIntegration.api.SdkControlRequest;
 import com.ecat.integration.EnvAirStationManagerIntegration.api.SdkControlResult;
 import com.ecat.integration.EnvAirStationManagerIntegration.api.SdkParamMeta;
 import com.ecat.integration.EnvAirStationManagerIntegration.api.SdkSnapshotAttr;
@@ -366,13 +367,16 @@ class AirStationSdkAssemblyTest {
     @Test
     void control_nullOriginAndResult_mapsToNull() {
         when(controlService.execute(AsmControlOrigin.LOCAL, "com.ecat:integration-x",
-                UID, "temperature", "30.0"))
+                UID, "temperature", "30.0", null))
                 .thenReturn(AsmControlRecord.builder()
                         .id(12L).caller("com.ecat:integration-x")
                         .logicDeviceUniqueId(UID).attrId("temperature")
                         .durationMs(5L).build());
 
-        SdkControlResult out = sdk.control(UID, "temperature", "30.0", "com.ecat:integration-x");
+        SdkControlResult out = sdk.control(SdkControlRequest.builder()
+                .uid(UID).attrId("temperature").value("30.0").unit("")
+                .origin(AsmControlOrigin.LOCAL).caller("com.ecat:integration-x")
+                .build());
 
         assertEquals(Long.valueOf(12L), out.getRecordId());
         assertNull(out.getOrigin());

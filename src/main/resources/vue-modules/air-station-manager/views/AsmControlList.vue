@@ -27,9 +27,11 @@
           </el-select>
         </el-form-item>
         <el-form-item label="来源">
-          <el-select v-model="filter.origin" clearable placeholder="全部来源" style="width: 110px">
-            <el-option v-for="o in ORIGIN_OPTIONS" :key="o.value" :label="o.label" :value="o.value" />
-          </el-select>
+          <el-tooltip content="本地=本站自身发起（页面操作/报警联动）；远程=第三方集成代传的远程侧指令" placement="top">
+            <el-select v-model="filter.origin" clearable placeholder="全部来源" style="width: 150px">
+              <el-option v-for="o in ORIGIN_OPTIONS" :key="o.value" :label="o.label" :value="o.value" />
+            </el-select>
+          </el-tooltip>
         </el-form-item>
         <el-form-item label="结果">
           <el-select v-model="filter.result" clearable placeholder="全部结果" style="width: 110px">
@@ -46,7 +48,7 @@
       <el-table-column label="时刻" width="170">
         <template #default="{ row }">{{ formatLocalDateTime(row.createdAt) }}</template>
       </el-table-column>
-      <el-table-column label="来源" width="90">
+      <el-table-column label="来源" width="120">
         <template #default="{ row }">{{ originLabel(row.origin) }}</template>
       </el-table-column>
       <el-table-column prop="caller" label="调用方" min-width="120" show-overflow-tooltip />
@@ -123,10 +125,12 @@ const DEVICE_OPTIONS = SLOT_ENUM_NAMES.map((name) => ({
 }))
 const UID_LABELS = DEVICE_OPTIONS.reduce((m, o) => { m[o.value] = o.label; return m }, {})
 
-// 来源/结果枚举中文映射：value 原样透传后端（过滤参数+行数据），仅展示层翻译
+// 来源/结果枚举中文映射：value 原样透传后端（过滤参数+行数据），仅展示层翻译。
+// origin 语义（2026-09-11 重定义）：LOCAL=本站自身发起（本站页面操作、站内报警联动）；
+// REMOTE=第三方集成代传的远程侧指令（caller=最终用户标识，不再是「本站 web 操作」）
 const ORIGIN_OPTIONS = [
-  { value: 'REMOTE', label: '远程' },
-  { value: 'LOCAL', label: '本地' },
+  { value: 'REMOTE', label: '远程（代传）' },
+  { value: 'LOCAL', label: '本地（本站）' },
 ]
 const RESULT_OPTIONS = [
   { value: 'PENDING', label: '执行中' },

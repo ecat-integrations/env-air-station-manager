@@ -90,8 +90,9 @@ public class AsmAlarmRuleConsumer extends AbstractBatchBusConsumer<DeviceDataCha
                 continue;
             }
             try {
+                // 联动值取规则配置原值，不做单位换算（fromUnit=null=按属性默认单位写入，与配置口径一致）
                 controlService.execute(AsmControlOrigin.LOCAL, "asm-alarm",
-                        linkage.getDeviceUid(), linkage.getAttrId(), linkage.getValue());
+                        linkage.getDeviceUid(), linkage.getAttrId(), linkage.getValue(), null);
             } catch (RuntimeException e) {
                 log.error("[诊断调试] 报警联动执行失败（报警已落库，联动设备写未成）: 规则="
                         + rule.getAlarmType() + " 联动=" + linkage.getDeviceUid() + "/"

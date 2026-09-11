@@ -2,6 +2,8 @@ package com.ecat.integration.EnvAirStationManagerIntegration.service;
 
 import com.ecat.core.State.AttributeBase;
 import com.ecat.core.State.AttrState;
+import com.ecat.core.State.UnitInfo;
+import com.ecat.core.State.Unit.UnitInfoFactory;
 import com.ecat.core.Utils.Log;
 import com.ecat.core.Utils.LogFactory;
 import com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmControlRecord;
@@ -43,8 +45,8 @@ import javax.annotation.PreDestroy;
  *       取 displayValue+unit 落 before_value；</li>
  *   <li><b>PENDING 先落</b>：审计行先 insert（回填 id），异步完成后回填——先有记录后有结果，
  *       任何路径（含超时）都留痕；</li>
- *   <li><b>专用 executor 执行</b>：{@code attr.setDisplayValue(value)} 下发（Command 型经 commandMapping
- *       翻译到物理 bindAttr），不占总线线程；</li>
+ *   <li><b>专用 executor 执行</b>：{@code attr.setDisplayValue(value[, fromUnit])} 下发（Command 型经
+ *       commandMapping 翻译到物理 bindAttr；带单位时按请求单位换算写入），不占总线线程；</li>
  *   <li><b>有限超时回读</b>：完成回读 after=新 AttrState 并回填 SUCCESS/FAILED + duration_ms；
  *       超时如实记 TIMEOUT（不猜结果），迟到完成不覆盖已回填终态（AtomicBoolean 一次性闸）。</li>
  * </ol>
@@ -164,17 +166,19 @@ public class AsmControlService {
      * 执行一次控制写（唯一收口；同步返回 PENDING 审计行，终态异步回填到同一对象——
      * 调用方持引用可直接读终态，或按 id 回查 asm_control_record）。
      *
-     * @param origin 调用来源（LOCAL=SDK / REMOTE=REST）
-     * @param caller 严格非空：REMOTE=认证 principal；LOCAL=消费方集成坐标
-     * @param uid    站房逻辑设备 uniqueId（logicdevice_station.*）
-     * @param attrId 属性 id（须存在且可写）
-     * @param value  请求值（Command 型为选项 key）
+     * @param origin   调用来源（LOCAL=本站/集成自身发起；REMOTE=第三方代传远程侧指令）
+     * @param caller   严格非空：LOCAL=发起方集成坐标；REMOTE=最终用户标识
+     * @param uid      站房逻辑设备 uniqueId（logicdevice_station.*）
+     * @param attrId   属性 id（须存在且可写）
+     * @param value    请求值（Command 型为选项 key）
+     * @param fromUnit 请求值单位（null=不指定单位，按属性默认单位写入=无换算现状语义；
+     *                 非空=按该单位换算写入，跨量纲失败属执行期失败→异步 FAILED）
      * @return 审计记录（id 已回填；result 终态异步回填）
      * @throws IllegalArgumentException origin/caller/value 空、uid 非站房前缀、设备或 attr 不存在
      * @throws IllegalStateException     attr 不可写（canValueChange=false）
      */
     public AsmControlRecord execute(AsmControlOrigin origin, String caller, String uid,
-                                    String attrId, String value) {
+                                    String attrId, String value, UnitInfo fromUnit) {
         if (origin == null) {
             throw new IllegalArgumentException("origin 不能为空（LOCAL/REMOTE）");
         }
@@ -209,7 +213,8 @@ public class AsmControlService {
                 .attrId(attrId)
                 .action(AsmControlAction.of(attr).name())
                 .beforeValue(snapshot(beforeState))
-                .requestedValue(value)
+                // 请求值留痕带单位口径（full string）——不带单位的行可与历史行零歧义区分
+                .requestedValue(requestedValue(value, fromUnit))
                 .result(AsmControlResult.PENDING)
                 .build();
         recordMapper.insert(record);
@@ -219,7 +224,10 @@ public class AsmControlService {
 
         controlExecutor.execute(() -> {
             try {
-                attr.setDisplayValue(value).whenComplete((ok, ex) -> {
+                CompletableFuture<Boolean> write = fromUnit == null
+                        ? attr.setDisplayValue(value)
+                        : attr.setDisplayValue(value, fromUnit);
+                write.whenComplete((ok, ex) -> {
                     if (ex != null) {
                         finalizeOutcome(record, attr, finalized, start, AsmControlResult.FAILED,
                                 ex.getMessage() == null ? ex.toString() : ex.getMessage());
@@ -278,12 +286,40 @@ public class AsmControlService {
         }
     }
 
-    /** AttrState 快照串：displayValue + 空格 + 单位（无量纲只存 displayValue；state 为 null 返 null）。 */    private static String snapshot(AttrState<?> state) {
+    /** AttrState 快照串：displayValue + 空格 + 单位（无量纲只存 displayValue；state 为 null 返 null）。 */
+    private static String snapshot(AttrState<?> state) {
         if (state == null || state.getDisplayValue() == null) {
             return null;
         }
         return state.getNativeUnit() == null
                 ? state.getDisplayValue()
                 : state.getDisplayValue() + " " + state.getNativeUnit();
+    }
+
+    /** 审计请求值留痕串：带单位请求 = 「值 + 空格 + 单位 full string」（如 26.5 TemperatureUnit.CELSIUS）。 */
+    private static String requestedValue(String value, UnitInfo fromUnit) {
+        return fromUnit == null ? value : value + " " + fromUnit.getFullUnitString();
+    }
+
+    /**
+     * 请求单位串 → {@link UnitInfo}（SDK/REST 两入口共用同一段解析，杜绝口径分叉）：
+     * null/空白 = 不指定单位（返 null，按属性默认单位写入）；非空 = 单位 full string
+     * 「枚举类名.枚举常量名」（如 {@code TemperatureUnit.CELSIUS}，{@code °C}/{@code mA} 等
+     * 展示层符号禁用），非法抛 {@link IllegalArgumentException} 明确拒绝。
+     *
+     * <p>是否允许 null 由入口自行裁定（SDK 请求对象把 null 视为漏传须拒绝；REST 请求体字段缺省
+     * 视为不指定）——本助手只承载「非空串怎么解析」这一段共性。</p>
+     */
+    public static UnitInfo parseFromUnit(String unit) {
+        if (unit == null || unit.trim().isEmpty()) {
+            return null;
+        }
+        try {
+            return UnitInfoFactory.getEnum(unit.trim());
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("unit 非法：须为单位 full string「枚举类名.枚举常量名」"
+                    + "（如 TemperatureUnit.CELSIUS；°C/mA 等符号是展示层名称，禁止作传输值）: "
+                    + unit + "，原因: " + e.getMessage());
+        }
     }
 }

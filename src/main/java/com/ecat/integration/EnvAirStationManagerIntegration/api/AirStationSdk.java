@@ -1,5 +1,6 @@
 package com.ecat.integration.EnvAirStationManagerIntegration.api;
 
+import com.ecat.integration.EnvAirStationManagerIntegration.support.AsmControlOrigin;
 import com.ecat.integration.EnvAirStationManagerIntegration.support.AsmIntervalMode;
 import com.ecat.integration.EnvAirStationManagerIntegration.support.AsmStatGranularity;
 
@@ -117,17 +118,41 @@ public interface AirStationSdk {
     List<SdkAlarmTypeMeta> listAlarmTypes();
 
     /**
-     * P4：执行一次站房设备控制写（origin=LOCAL，经统一控制服务收口、全程落 asm_control_record 审计）。
+     * 执行一次站房设备控制写——经统一控制服务收口，全程落 {@code asm_control_record} 审计。
      *
-     * <p>同步返回审计行投影（recordId + 当前 result）；执行异步完成回填终态（SUCCESS/FAILED/TIMEOUT），
-     * 终态亦可按 recordId 回查。非法入参（uid/attrId/value/caller 空白、未知设备/属性、不可写属性）
-     * 抛 {@link IllegalArgumentException} / {@link IllegalStateException}，明确不静默。</p>
+     * <p><b>origin 由调用方声明</b>（决定权在 SDK 调用方，集成不代做隐式决定）：</p>
+     * <ul>
+     *   <li>{@link AsmControlOrigin#LOCAL} = 本站/集成自身发起：本站 web 页面操作、站内报警联动；
+     *       {@code caller} 填发起方集成坐标（如 {@code com.ecat:integration-xxx}）。</li>
+     *   <li>{@link AsmControlOrigin#REMOTE} = 第三方集成代传的远程侧指令；{@code caller} 填
+     *       最终用户标识（如 {@code platformA:user123}），把「谁在远端下的令」留进审计。</li>
+     * </ul>
      *
-     * @param uid    站房逻辑设备 uniqueId（logicdevice_station.*）
-     * @param attrId 可写属性 id（Command 型传选项 key）
-     * @param value  请求值
-     * @param caller 消费方集成坐标（严格非空，落审计 caller 列）
-     * @return 控制结果行（recordId/result/error/durationMs）
+     * <p><b>单位换算</b>：{@code unit} 非空时按请求值单位换算写入（full string 口径，
+     * 见 {@link SdkControlRequest#unit}）；空串=按属性默认单位写入（无换算）；null 非法。</p>
+     *
+     * <p><b>异步终态模型</b>：同步返回审计行投影（recordId + 当前 result，受理即 PENDING）；执行异步
+     * 完成回填终态（SUCCESS/FAILED/TIMEOUT），可按 recordId 回查。入参契约破坏（约束表任一不满足、
+     * 未知设备/属性、不可写属性）同步抛 {@link IllegalArgumentException} / {@link IllegalStateException}
+     * 且不落审计行；执行期失败（Command 选项非法、跨量纲换算失败、设备拒绝）→ 异步 FAILED。</p>
+     *
+     * <p>示例：</p>
+     * <pre>{@code
+     * SdkControlResult r = sdk.control(SdkControlRequest.builder()
+     *         .uid("logicdevice_station.air_conditioner")
+     *         .attrId("setpoint_temp")
+     *         .value("26.5")
+     *         .unit("TemperatureUnit.CELSIUS")          // 空串=按属性默认单位；禁止 "°C"
+     *         .origin(AsmControlOrigin.LOCAL)           // 本集成自身发起
+     *         .caller("com.ecat:integration-env-push-x")
+     *         .build());
+     * }</pre>
+     *
+     * @param request 控制请求（uid/attrId/value/unit/origin/caller，约束见 {@link SdkControlRequest}）
+     * @return 控制结果行（recordId/origin/result/error/durationMs）
+     * @throws IllegalArgumentException 请求为空 / 字段空白 / unit 为 null 或非法 full string /
+     *                                  origin 为 null / 未知设备或属性
+     * @throws IllegalStateException     属性不可写（canValueChange=false）
      */
-    SdkControlResult control(String uid, String attrId, String value, String caller);
+    SdkControlResult control(SdkControlRequest request);
 }

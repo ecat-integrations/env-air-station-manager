@@ -3,6 +3,7 @@ package com.ecat.integration.EnvAirStationManagerIntegration.service;
 import com.ecat.integration.EnvAirStationManagerIntegration.api.AirStationSdk;
 import com.ecat.integration.EnvAirStationManagerIntegration.api.SdkAlarmEntry;
 import com.ecat.integration.EnvAirStationManagerIntegration.api.SdkAlarmTypeMeta;
+import com.ecat.integration.EnvAirStationManagerIntegration.api.SdkControlRequest;
 import com.ecat.integration.EnvAirStationManagerIntegration.api.SdkControlResult;
 import com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmAlarmRecord;
 import com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmAlarmRule;
@@ -19,11 +20,11 @@ import com.ecat.integration.EnvAirStationManagerIntegration.controller.dto.AsmSn
 import com.ecat.integration.EnvAirStationManagerIntegration.mapper.AsmHistoryQueryMapper;
 import com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmControlRecord;
 import com.ecat.integration.EnvAirStationManagerIntegration.rule.AsmAlarmRuleDefinition;
-import com.ecat.integration.EnvAirStationManagerIntegration.support.AsmControlOrigin;
 import com.ecat.integration.EnvAirStationManagerIntegration.support.AsmIntervalMode;
 import com.ecat.integration.EnvAirStationManagerIntegration.support.AsmStatGranularity;
 import com.ecat.integration.EnvAirStationManagerIntegration.support.AsmUnitPurpose;
 import com.ecat.core.State.AttributeBase;
+import com.ecat.core.State.UnitInfo;
 import com.ecat.integration.logicdevice.LogicDevice.LogicDevice;
 import com.ecat.integration.logicdevice.LogicDeviceManager;
 import lombok.RequiredArgsConstructor;
@@ -219,8 +220,13 @@ public class AirStationSdkImpl implements AirStationSdk {
     }
 
     @Override
-    public SdkControlResult control(String uid, String attrId, String value, String caller) {
-        AsmControlRecord record = controlService.execute(AsmControlOrigin.LOCAL, caller, uid, attrId, value);
+    public SdkControlResult control(SdkControlRequest request) {
+        validateControlRequest(request);
+        // unit 三态在边界一次裁定：null=调用方漏传（拒绝）；空串=明确不指定单位（nullUnit）；非空=full string
+        // 前缀/存在/可写等设备侧校验归统一控制服务（与 REST/联动同一收口，不在此重复）
+        UnitInfo fromUnit = AsmControlService.parseFromUnit(request.getUnit());
+        AsmControlRecord record = controlService.execute(request.getOrigin(), request.getCaller(),
+                request.getUid(), request.getAttrId(), request.getValue(), fromUnit);
         return SdkControlResult.builder()
                 .recordId(record.getId())
                 .origin(record.getOrigin() == null ? null : record.getOrigin().name())
@@ -228,6 +234,37 @@ public class AirStationSdkImpl implements AirStationSdk {
                 .error(record.getError())
                 .durationMs(record.getDurationMs())
                 .build();
+    }
+
+    /**
+     * 控制请求提交前同步校验（{@link SdkControlRequest} 约束表中「请求形态」逐条；
+     * 任一不满足抛 IAE 且不落审计行，不静默兜底）。
+     */
+    private static void validateControlRequest(SdkControlRequest request) {
+        if (request == null) {
+            throw new IllegalArgumentException("request 不能为空（须为 SdkControlRequest.builder()...build() 构造）");
+        }
+        if (request.getUid() == null || request.getUid().trim().isEmpty()) {
+            throw new IllegalArgumentException("uid 不能为空白（须为 logicdevice_station.* 前缀的站房逻辑设备 uniqueId）");
+        }
+        if (request.getAttrId() == null || request.getAttrId().trim().isEmpty()) {
+            throw new IllegalArgumentException("attrId 不能为空白（须为目标设备已注册的可写属性 id）");
+        }
+        if (request.getValue() == null || request.getValue().trim().isEmpty()) {
+            throw new IllegalArgumentException("value 不能为空白（数值属性=数字串；Command/Select/Binary=选项 key）");
+        }
+        if (request.getUnit() == null) {
+            throw new IllegalArgumentException("unit 不能为 null（明确不指定单位传空串 \"\"；携带单位传 full string，"
+                    + "如 TemperatureUnit.CELSIUS）");
+        }
+        if (request.getOrigin() == null) {
+            throw new IllegalArgumentException("origin 不能为 null（二选一：LOCAL=本站/集成自身发起；"
+                    + "REMOTE=第三方代传远程侧指令）");
+        }
+        if (request.getCaller() == null || request.getCaller().trim().isEmpty()) {
+            throw new IllegalArgumentException("caller 不能为空白（LOCAL=发起方集成坐标，如 com.ecat:integration-xxx；"
+                    + "REMOTE=最终用户标识，如 platformA:user123）");
+        }
     }
 
     /** STORAGE 行 unit（桶单位唯一真相源；行缺失=null 量纲语义）。 */
