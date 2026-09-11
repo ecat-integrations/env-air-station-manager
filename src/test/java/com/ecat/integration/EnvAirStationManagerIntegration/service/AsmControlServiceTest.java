@@ -51,8 +51,9 @@ import static org.mockito.Mockito.when;
 /**
  * 控制服务单测——手动驱动 executor / 超时调度器 / 时钟（零 sleep，确定性时序）：
  * PENDING 先落 → 执行回填 SUCCESS/FAILED；超时回填 TIMEOUT 且迟到执行不双写；
- * before/after 取真实 AttrState（builder 构造，禁 mock final）；非法入参/不可写明确抛；
- * 带单位写分支（fromUnit 决定写入口 + requestedValue 留痕 + 跨量纲异步 FAILED）。
+ * before 取真实 AttrState（builder 构造，禁 mock final）；after=下发设置值留痕
+ * （三态统一审计口径，是否生效由 result 表达）；非法入参/不可写明确抛；
+ * 带单位写分支（fromUnit 决定写入口 + requestedValue/afterValue 留痕 + 跨量纲异步 FAILED）。
  *
  * @author coffee
  */
@@ -255,7 +256,8 @@ class AsmControlServiceTest {
         AsmControlRecord done = cap.getValue();
         assertEquals(77L, done.getId());
         assertEquals(AsmControlResult.SUCCESS, done.getResult());
-        assertEquals("30.0 " + TemperatureUnit.CELSIUS, done.getAfterValue());
+        // after=下发设置值留痕（本次 fromUnit=null → 裸值），不再读回执行后镜像态
+        assertEquals("30.0", done.getAfterValue());
         assertEquals(Long.valueOf(300L), done.getDurationMs());
         assertNull(done.getError());
         assertEquals(AsmControlResult.SUCCESS, rec.getResult());
@@ -294,6 +296,7 @@ class AsmControlServiceTest {
         executor.runAll();
 
         assertEquals(AsmControlResult.FAILED, rec.getResult());
+        assertEquals("30.0", rec.getAfterValue(), "FAILED 也记下发设置值（审计成败皆留痕）");
         assertTrue(rec.getError().contains("device offline"));
         verify(recordMapper).updateResult(any(AsmControlRecord.class));
     }
@@ -349,9 +352,9 @@ class AsmControlServiceTest {
         verify(broadcaster).broadcastNamed(eq(AsmControlCompletedEvent.TYPE), contains("\"result\":\"SUCCESS\""));
         verify(broadcaster).broadcastNamed(eq(AsmControlCompletedEvent.TYPE),
                 contains("\"uid\":\"logicdevice_station.th\""));
-        // SUCCESS 终态帧带权威 afterValue（=审计 after_value，attr 可读状态此时已是新值）
+        // SUCCESS 终态帧 afterValue=下发设置值留痕（与 requested 同源，不读回镜像态防竞态）
         verify(broadcaster).broadcastNamed(eq(AsmControlCompletedEvent.TYPE),
-                contains("\"afterValue\":\"30.0 " + TemperatureUnit.CELSIUS + "\""));
+                contains("\"afterValue\":\"30.0\""));
     }
 
     @Test
@@ -366,8 +369,8 @@ class AsmControlServiceTest {
         timeoutScheduler.fireAll();
 
         verify(broadcaster).broadcastNamed(eq(AsmControlCompletedEvent.TYPE), contains("\"result\":\"TIMEOUT\""));
-        // TIMEOUT 不猜结果：帧 afterValue 恒 null
-        verify(broadcaster).broadcastNamed(eq(AsmControlCompletedEvent.TYPE), contains("\"afterValue\":null"));
+        // TIMEOUT 也记下发设置值（审计成败皆留痕，是否生效由 result 表达）
+        verify(broadcaster).broadcastNamed(eq(AsmControlCompletedEvent.TYPE), contains("\"afterValue\":\"30.0\""));
     }
 
     @Test
@@ -401,7 +404,7 @@ class AsmControlServiceTest {
     // ===== 超时路径：如实记 TIMEOUT，迟到执行不双写、不猜结果 =====
 
     @Test
-    void execute_timeoutRefillsTimeoutWithoutAfterAndLateRunDoesNotDoubleWrite() {
+    void execute_timeoutRefillsTimeoutWithRequestedAfterAndLateRunDoesNotDoubleWrite() {
         stubInsertWithId(5L);
         WritableAttr attr = new WritableAttr("temperature", true, state("25.5", TemperatureUnit.CELSIUS),
                 (v, self) -> new CompletableFuture<>()); // 永不完成
@@ -414,7 +417,8 @@ class AsmControlServiceTest {
         timeoutScheduler.fireAll();
 
         assertEquals(AsmControlResult.TIMEOUT, rec.getResult());
-        assertNull(rec.getAfterValue());
+        // TIMEOUT 同样记下发设置值（审计三态统一，不猜结果由 result 表达）
+        assertEquals("30.0", rec.getAfterValue());
         assertEquals(Long.valueOf(TIMEOUT.toMillis()), rec.getDurationMs());
         verify(recordMapper, times(1)).updateResult(any(AsmControlRecord.class));
 
@@ -493,6 +497,8 @@ class AsmControlServiceTest {
         assertEquals(TemperatureUnit.CELSIUS, attr.lastUnitArg, "须落带单位写入口且单位原样透传");
         assertEquals("26.5 " + TemperatureUnit.CELSIUS.getFullUnitString(), rec.getRequestedValue(),
                 "留痕=值 + 空格 + 单位 full string（非 toString 符号）");
+        assertEquals("26.5 " + TemperatureUnit.CELSIUS.getFullUnitString(), rec.getAfterValue(),
+                "带单位下发 after=值+当时单位 full string");
         assertEquals(AsmControlResult.SUCCESS, rec.getResult());
     }
 

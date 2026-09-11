@@ -47,7 +47,8 @@ import javax.annotation.PreDestroy;
  *       任何路径（含超时）都留痕；</li>
  *   <li><b>专用 executor 执行</b>：{@code attr.setDisplayValue(value[, fromUnit])} 下发（Command 型经
  *       commandMapping 翻译到物理 bindAttr；带单位时按请求单位换算写入），不占总线线程；</li>
- *   <li><b>有限超时回读</b>：完成回读 after=新 AttrState 并回填 SUCCESS/FAILED + duration_ms；
+ *   <li><b>有限超时回填</b>：完成回填 SUCCESS/FAILED + duration_ms + after_value（=下发设置值+当时单位，
+ *       三态统一审计留痕，是否生效由 result 表达——不回读执行后镜像态，logic 镜像异步刷新存在竞态）；
  *       超时如实记 TIMEOUT（不猜结果），迟到完成不覆盖已回填终态（AtomicBoolean 一次性闸）。</li>
  * </ol>
  *
@@ -229,35 +230,40 @@ public class AsmControlService {
                         : attr.setDisplayValue(value, fromUnit);
                 write.whenComplete((ok, ex) -> {
                     if (ex != null) {
-                        finalizeOutcome(record, attr, finalized, start, AsmControlResult.FAILED,
+                        finalizeOutcome(record, finalized, start, AsmControlResult.FAILED,
                                 ex.getMessage() == null ? ex.toString() : ex.getMessage());
                     } else if (Boolean.TRUE.equals(ok)) {
-                        finalizeOutcome(record, attr, finalized, start, AsmControlResult.SUCCESS, null);
+                        finalizeOutcome(record, finalized, start, AsmControlResult.SUCCESS, null);
                     } else {
-                        finalizeOutcome(record, attr, finalized, start, AsmControlResult.FAILED,
+                        finalizeOutcome(record, finalized, start, AsmControlResult.FAILED,
                                 "设备返回失败（setDisplayValue=false）");
                     }
                 });
             } catch (RuntimeException e) {
-                finalizeOutcome(record, attr, finalized, start, AsmControlResult.FAILED,
+                finalizeOutcome(record, finalized, start, AsmControlResult.FAILED,
                         e.getMessage() == null ? e.toString() : e.getMessage());
             }
         });
 
         timeoutScheduler.schedule(() ->
-                        finalizeOutcome(record, attr, finalized, start, AsmControlResult.TIMEOUT, null),
+                        finalizeOutcome(record, finalized, start, AsmControlResult.TIMEOUT, null),
                 timeout);
         return record;
     }
 
-    /** 终态一次性回填（超时/完成竞态谁先谁赢，迟到方直接返回不双写）；TIMEOUT 不回读 after（不猜结果）。 */
-    private void finalizeOutcome(AsmControlRecord record, AttributeBase<?> attr, AtomicBoolean finalized,
+    /**
+     * 终态一次性回填（超时/完成竞态谁先谁赢，迟到方直接返回不双写）。
+     * after_value 审计口径（bug-record-20260911-104245）：三态统一记录本次下发的设置值+当时单位
+     * （与 requested_value 同源同形），是否真正生效由 result 列表达。不在此回读 attr.getState()——
+     * logic 镜像经独占 worker 异步刷新，终态时点回读会与镜像刷新竞态，曾把上一轮旧值当执行后值留痕。
+     */
+    private void finalizeOutcome(AsmControlRecord record, AtomicBoolean finalized,
                                  Instant start, AsmControlResult result, String error) {
         if (!finalized.compareAndSet(false, true)) {
             return;
         }
         record.setResult(result);
-        record.setAfterValue(result == AsmControlResult.TIMEOUT ? null : snapshot(attr.getState()));
+        record.setAfterValue(record.getRequestedValue());
         record.setError(error);
         record.setDurationMs(Duration.between(start, clock.instant()).toMillis());
         recordMapper.updateResult(record);

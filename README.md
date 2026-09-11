@@ -38,7 +38,7 @@
 - **范围**：DM `GET /device/control/settings` 配置驱动的 7 台站房设备（每类设备显示定制一个 js：`control/devices/`），element-plus 5 种 displayType 渲染（`control/renderers/`）；`?focus={uid}` 锚点滚动+高亮。
 - **数据流（纯流式）**：加载仅两次查询（snapshot + DM settings），此后值变化走 SSE `device.data.update` 帧、控制终态走 SSE **`control.completed`** 帧（`AsmControlService.finalizeOutcome` → `AsmSseBroadcaster.broadcastNamed`），零轮询；SSE 断连中禁「确认」，重连一次性补偿（snapshot 重拉 + 在途项 `GET /asm-monitor/control/{id}` 单查）。
 - **交互模型**：per-card 修改出「确认/撤销」（确认=串行逐 attr POST /control，行内徽章 PENDING→SUCCESS/FAILED/TIMEOUT）；dirty 字段不被 SSE 帧覆盖（其他渠道控制实时反映）；门禁 stateless 命令纳入统一待执行模型（primary+对勾角标）。
-- **settled 收敛模型**：`control.completed` 终态帧带权威 `afterValue`（SUCCESS 时 core attr 可读状态必为新值——数值型乐观更新 / Command 型 ACK 后同步更新，快照即权威值），前端归一化为 cmd.value 同形态后作 settled 值，「帧到即收敛」无回跳；`SETTLED_MAX_MS=3s` 仅兜底防迟到旧值 poll 帧（写传播与设备轮询竞态的实证场景），窗内不同值帧判迟到旧帧忽略、同值帧=收敛交还 live；显示优先级 `pending → settled → live`。批次徽章生命周期：beginSubmit 清整卡旧徽章。
+- **settled 收敛模型**：`control.completed` 终态帧带 `afterValue`（=下发设置值+当时单位，与审计 after_value/requested_value 同源同形，三态统一记录——不读回执行后镜像态，规避 logic 镜像异步刷新竞态），前端归一化为 cmd.value 同形态后作 settled 值，「帧到即收敛」无回跳；`SETTLED_MAX_MS=3s` 仅兜底防迟到旧值 poll 帧（写传播与设备轮询竞态的实证场景），窗内不同值帧判迟到旧帧忽略、同值帧=收敛交还 live；显示优先级 `pending → settled → live`。批次徽章生命周期：beginSubmit 清整卡旧徽章。
 
 ## 报警记录生命周期（episode 心跳窗）
 

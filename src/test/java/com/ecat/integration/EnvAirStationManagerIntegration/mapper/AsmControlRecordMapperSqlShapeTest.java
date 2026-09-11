@@ -47,7 +47,7 @@ class AsmControlRecordMapperSqlShapeTest {
         }
         String insertSection = xml.substring(xml.indexOf("<insert"), xml.indexOf("</insert>"));
         assertTrue(!insertSection.contains("after_value"),
-                "after_value 不在 insert 列（执行前不可知，仅执行后回填）");
+                "after_value 不在 insert 列（终态回填列，随 result 一并由 updateResult 落，PENDING 行保持 null）");
     }
 
     @Test
