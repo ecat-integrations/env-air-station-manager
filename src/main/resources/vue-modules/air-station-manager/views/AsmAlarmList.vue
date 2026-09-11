@@ -5,7 +5,9 @@
     trigger_time/recover_time/duration_ms（活跃行 recover_time/duration_ms 为 null）。
     持续时长列活跃行「持续中 …」按渲染时刻现算（无定时器；查询/刷新触发重渲染自然更新）；
     越限首事件时刻（原「起始时刻」列）退居触发时刻单元格 title 悬浮。
-    窗口按触发/恢复时刻（end_time）落窗；start/end 为壁钟串 'YYYY-MM-DDTHH:mm:ss' 原样提交
+    窗口 = episode 区间重叠（后端 overlapWindow 谓词，与 SDK queryAlarmEntries 同口径）：
+    持续中 ACTIVE 行默认视图天然可见；默认时间窗 = 昨天00:00 → 明天00:00。
+    start/end 为壁钟串 'YYYY-MM-DDTHH:mm:ss' 原样提交
     （el-date-picker datetimerange 以 value-format 同串、提交前拆回两字段，线上格式逐字节不变）。
   -->
   <div class="asm-page">
@@ -108,11 +110,14 @@ import { formatLocalDateTime, formatLocalInputSeconds } from '@/utils/datetime'
 export default {
   name: 'alarm_list',
   data() {
+    // 默认时间窗 = 昨天00:00 → 明天00:00（本地壁钟；Date 日期运算自动跨月/跨年进位）——
+    // 覆盖昨夜至今触发的报警，且区间重叠口径下持续中 episode 默认可见
     const now = new Date()
+    const dayStart = (offset) => new Date(now.getFullYear(), now.getMonth(), now.getDate() + offset, 0, 0, 0)
     return {
       filter: {
-        start: formatLocalInputSeconds(new Date(now.getTime() - 7 * 24 * 3600 * 1000)),
-        end: formatLocalInputSeconds(now),
+        start: formatLocalInputSeconds(dayStart(-1)),
+        end: formatLocalInputSeconds(dayStart(1)),
         uid: '',
         status: '',
         pageNum: 1,

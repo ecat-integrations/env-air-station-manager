@@ -25,7 +25,9 @@ import java.util.Map;
  * ASM 报警记录查询（{@code GET /asm-monitor/alarm-record}）——分页/时间窗/设备过滤。
  *
  * <p>start/end 为 ISO-8601 LocalDateTime 壁钟串（前端 datetime-local），controller 按 core JVM 壁钟时区
- * 落 UTC 绝对时刻（与 AsmHistoryQueryController 同口径）。查询窗按 end_time 落窗（触发/恢复时刻）。</p>
+ * 落 UTC 绝对时刻（与 AsmHistoryQueryController 同口径）。查询窗 = episode 区间重叠（左开右闭，
+ * mapper {@code overlapWindow} 共享片段，与 SDK {@code queryAlarmEntries} 同口径）：持续中 ACTIVE 行
+ * 天然命中，status 仅追加过滤不参与窗口分叉。</p>
  *
  * <p><b>行追加契约字段</b>（前端 ruoyi 化，字段名固定）：{@code device_label}（槽中文）/
  * {@code attr_label}（attr 中文 displayName）/ {@code trigger_time}（=start_time，episode 模型触发

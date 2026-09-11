@@ -24,6 +24,17 @@
         start_time, end_time, description, status, last_breach_time, result_content, created_at
     </sql>
 
+    <!-- episode 区间重叠窗口谓词（单一真相源）：查询窗左开右闭 (start, end]——end 时刻触发的算本期、
+         恰在 start 闭单的归上期，连续分窗（上窗 end=下窗 start）每条报警恰好命中一次（无缝无重）；
+         等价于报警 episode 与开区间时刻集 (start, end] 有交集即命中。end_time 为 null 的 ACTIVE 行
+         （持续中）不受比较约束天然命中。REST 列表（selectList/countList）与 SDK
+         （selectEntriesByType）共用本片段，禁各自内联副本（bug-record-20260911-200004：列表曾
+         分叉 end_time-only 锚点，默认视图滤掉持续中报警）。 -->
+    <sql id="overlapWindow">
+        start_time &lt;= #{end}
+        and (end_time is null or end_time &gt; #{start})
+    </sql>
+
     <!-- episode 落行（bug-record-20260902-183355 修复）：ACTIVE 行 end_time=null（活跃中无结束时刻，
          评估器不置值）；恢复行（POWER 恢复路径）评估器已置 endTime——曾硬编码 null 把它丢弃，致恢复行
          默认列表不可见、recover_time/duration_ms 恒 null，已按实体值落列（两种行同一 insert）。 -->
@@ -74,21 +85,13 @@
         </foreach>
     </update>
 
-    <!-- 窗口锚点：ACTIVE 行 end_time=null（活跃中无结束时刻），带 status 过滤时锚 COALESCE(end_time,
-         last_breach_time) 才能把活跃行查出来；不带 status 保持原 end_time 落窗口径（历史触发记录）。 -->
+    <!-- 列表窗口口径 = overlapWindow 共享片段（与 SDK 同源，见片段注释）：ACTIVE 行（持续中）
+         默认视图天然命中；status/uid 仅作追加过滤，不参与窗口分叉。排序锚 COALESCE——已恢复行按
+         恢复时刻、活跃行按最近续期时刻降序（持续报警自动浮顶）。 -->
     <select id="selectList" resultMap="AsmAlarmRecordResult">
         select <include refid="allColumns"/>
         from asm_alarm_record
-        <choose>
-            <when test="status != null">
-                where COALESCE(end_time, last_breach_time) &gt;= #{start}
-                  and COALESCE(end_time, last_breach_time) &lt; #{end}
-            </when>
-            <otherwise>
-                where end_time &gt;= #{start}
-                  and end_time &lt; #{end}
-            </otherwise>
-        </choose>
+        where <include refid="overlapWindow"/>
         <if test="logicDeviceUniqueId != null">
           and logic_device_unique_id = #{logicDeviceUniqueId}
         </if>
@@ -102,16 +105,7 @@
     <select id="countList" resultType="long">
         select count(*)
         from asm_alarm_record
-        <choose>
-            <when test="status != null">
-                where COALESCE(end_time, last_breach_time) &gt;= #{start}
-                  and COALESCE(end_time, last_breach_time) &lt; #{end}
-            </when>
-            <otherwise>
-                where end_time &gt;= #{start}
-                  and end_time &lt; #{end}
-            </otherwise>
-        </choose>
+        where <include refid="overlapWindow"/>
         <if test="logicDeviceUniqueId != null">
           and logic_device_unique_id = #{logicDeviceUniqueId}
         </if>
@@ -120,16 +114,13 @@
         </if>
     </select>
 
-    <!-- SDK 按报警标识 + 时间窗查询：episode 区间重叠，查询窗左开右闭 (start, end]——end 时刻触发的
-         算本期、恰在 start 闭单的归上期，连续分窗查询（上窗 end=下窗 start）每条报警恰好命中一次
-         （无缝无重）；等价于报警 episode 与开区间时刻集 (start, end] 有交集即命中。end_time 为 null 的
-         ACTIVE 行（持续中）不受比较约束天然命中——修复旧 end_time 落窗锚点查不出持续中的缺陷。 -->
+    <!-- SDK 按报警标识 + 时间窗查询：episode 区间重叠（窗口谓词收敛到 overlapWindow 共享片段，
+         语义详见片段注释——修复旧 end_time 落窗锚点查不出持续中的缺陷后成单一真相源）。 -->
     <select id="selectEntriesByType" resultMap="AsmAlarmRecordResult">
         select <include refid="allColumns"/>
         from asm_alarm_record
         where alarm_type = #{alarmType}
-          and start_time &lt;= #{end}
-          and (end_time is null or end_time &gt; #{start})
+          and <include refid="overlapWindow"/>
         order by start_time desc
         limit #{limit}
     </select>
