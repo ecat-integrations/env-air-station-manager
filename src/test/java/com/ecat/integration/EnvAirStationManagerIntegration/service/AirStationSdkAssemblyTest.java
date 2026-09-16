@@ -302,7 +302,7 @@ class AirStationSdkAssemblyTest {
                         .unit("V").updateTime(upd).source("LIVE").build(),
                 AsmSnapshotAttrDto.builder()
                         .attrId("switch").value(null).valueText("开")
-                        .unit(null).updateTime(upd).source("RAW").build()));
+                        .unit(null).updateTime(upd).source("DEF").build()));
 
         List<SdkSnapshotAttr> out = sdk.querySnapshot(UID);
         assertEquals(2, out.size());
@@ -317,7 +317,7 @@ class AirStationSdkAssemblyTest {
         assertNull(b.getValue());
         assertEquals("开", b.getValueText());
         assertNull(b.getUnit());
-        assertEquals("RAW", b.getSource());
+        assertEquals("DEF", b.getSource());
     }
 
     // ========== queryAlarmEntries ==========

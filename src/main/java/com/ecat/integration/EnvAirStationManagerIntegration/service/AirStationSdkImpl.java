@@ -49,7 +49,7 @@ import java.util.Map;
  *   <li><b>value=STORAGE 桶均值原值</b>（机对机口径不做展示换算；unit 恒为 value 实际单位，
  *       取 asm_config_unit STORAGE 行 full key）。非数值 series（ALARM/STATE）value=null、
  *       取 SdkStatRow.valueText 原样透传（unit=seed 空串占位=显无单位）。</li>
- *   <li><b>querySnapshot</b> 委派 {@link AsmSnapshotService}（live 优先/raw 回放兜，MONITOR 出口换算），
+ *   <li><b>querySnapshot</b> 委派 {@link AsmSnapshotService}（live 唯一源、无值=DEF 占位，MONITOR 出口换算），
  *       REST snapshot 与 SDK 同一构建函数零口径分叉。</li>
  *   <li><b>queryAlarmEntries/listAlarmTypes</b>：按报警标识 + 左开右闭时间窗查 episode 重叠条目
  *       （含持续中），行形状与前端报警表格列一致；label 双字段与 durationMs 复用 REST 出口同一

@@ -9,7 +9,8 @@ import java.time.Instant;
 import java.util.List;
 
 /**
- * ASM 历史查询/SDK 读出口 mapper（stat 三级 SELECT + raw 最新值 + 参数清单）。
+ * ASM 历史查询/SDK 读出口 mapper（stat 三级 SELECT + 参数清单；raw 最新值回放查询已删除——
+ * snapshot live 唯一源，无值=无数据，见 AsmSnapshotService 类注释）。
  *
  * <p>防串台唯一闸：stat 查询必带 {@code interval_mode = #{modeCode}} 过滤（PK 含 interval_mode，
  * BACK/FRONT 同 data_time 双行并存，不过滤会串台——ADM 教训平移）。batch 单 SQL tuple IN-list，
@@ -83,12 +84,4 @@ public interface AsmHistoryQueryMapper {
      * 参数清单（SDK listStatParams 读出口）：asm_config_stat JOIN asm_config_unit(STORAGE) 双真相源投影。
      */
     List<AsmStatParamMetaRow> selectStatParamMetas();
-
-    /**
-     * raw 最新值（snapshot 回放源）：每 series 取 data_time 最大一行（DISTINCT ON 单 SQL，禁 per-series N+1）。
-     *
-     * @param uids 站房逻辑设备 uniqueId 列表
-     * @return 每 (uid, attrId) 最新 raw 样本行
-     */
-    List<com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmDataSample> selectLatestSamples(@Param("uids") List<String> uids);
 }

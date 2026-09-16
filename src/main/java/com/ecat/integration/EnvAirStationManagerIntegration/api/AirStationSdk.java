@@ -29,7 +29,7 @@ import java.util.List;
  *   <li><b>value = STORAGE 存储单位桶均值</b>（机对机口径，不做展示偏好换算）；unit 恒为 value 实际单位
  *       （asm_config_unit STORAGE 行 full key；null=无量纲）。非数值 series（ALARM/STATE）value=null、
  *       取 SdkStatRow.valueText（ALARM: normal/alarm；STATE: 状态串；unit=空串显无单位）。</li>
- *   <li><b>querySnapshot</b>：live 实时态优先（经 MONITOR 读出口换算），raw 最新值回放兜（source 标记 LIVE/RAW）。</li>
+ *   <li><b>querySnapshot</b>：live 唯一源（经 MONITOR 读出口换算）；无值参数按无数据处理出占位行（source 标记 LIVE/DEF）。</li>
  *   <li><b>无缓存</b>：直连 mapper（外部轮询分钟级，stat 查询毫秒级）。</li>
  * </ul>
  *
@@ -77,7 +77,7 @@ public interface AirStationSdk {
      * 查单台站房设备当前态（实时快照）。
      *
      * @param uid 站房逻辑设备 uniqueId（logicdevice_station.*）
-     * @return 属性行列表（live 优先/raw 回放兜）；registry 无该设备返空列表
+     * @return 属性行列表（live 唯一源，无值参数=DEF 占位行）；registry 无该设备返空列表
      * @throws IllegalArgumentException uid null/blank
      */
     List<SdkSnapshotAttr> querySnapshot(String uid);

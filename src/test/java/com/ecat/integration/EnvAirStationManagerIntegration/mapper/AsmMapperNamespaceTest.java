@@ -117,16 +117,6 @@ class AsmMapperNamespaceTest {
         assertTrue(hasInstantTypeHandler(bs), "data_time 走 TypeHandler");
     }
 
-    @Test
-    void dataSample_selectByLogicAttrTimeRange_filtersSeriesAndWindow() {
-        String sql = norm(bound("AsmDataSampleMapper.selectByLogicAttrTimeRange",
-                param("logicDeviceUniqueId", "u", "attrId", "a", "from", Instant.EPOCH, "to", Instant.EPOCH)));
-        assertTrue(sql.contains("logic_device_unique_id ="));
-        assertTrue(sql.contains("and attr_id ="));
-        assertTrue(sql.contains("and data_time between"));
-        assertTrue(sql.contains("order by data_time asc"));
-    }
-
     // ===== AsmStatMapper：三级 upsert 形状 =====
 
     @Test

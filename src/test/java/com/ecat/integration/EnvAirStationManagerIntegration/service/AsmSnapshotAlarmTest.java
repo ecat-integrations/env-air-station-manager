@@ -12,7 +12,6 @@ import com.ecat.core.State.AttributeClass;
 import com.ecat.core.State.AttrState;
 import com.ecat.integration.EnvAirStationManagerIntegration.controller.dto.AsmAlarmActiveDto;
 import com.ecat.integration.EnvAirStationManagerIntegration.controller.dto.AsmSnapshotDeviceDto;
-import com.ecat.integration.EnvAirStationManagerIntegration.mapper.AsmHistoryQueryMapper;
 import com.ecat.integration.EnvAirStationManagerIntegration.rule.AsmAlarmRegistry;
 import com.ecat.integration.logicdevice.LogicDevice.LogicDevice;
 import com.ecat.integration.logicdevice.LogicDeviceManager;
@@ -53,8 +52,6 @@ class AsmSnapshotAlarmTest {
     private static final String UID = "logicdevice_station.th";
 
     @Mock
-    private AsmHistoryQueryMapper historyMapper;
-    @Mock
     private AsmUnitContract unitContract;
 
     private AsmAlarmRegistry alarmRegistry;
@@ -63,7 +60,7 @@ class AsmSnapshotAlarmTest {
     @BeforeEach
     void setUp() {
         alarmRegistry = new AsmAlarmRegistry();
-        service = new AsmSnapshotService(historyMapper, unitContract, alarmRegistry);
+        service = new AsmSnapshotService(unitContract, alarmRegistry);
     }
 
     @AfterEach

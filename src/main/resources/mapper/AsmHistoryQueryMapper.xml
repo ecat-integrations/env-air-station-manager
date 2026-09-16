@@ -116,20 +116,4 @@
          AND u.purpose = 'STORAGE'
         ORDER BY s.logic_device_unique_id, s.attr_id
     </select>
-
-    <!--
-        raw 最新值（snapshot 回放源）：DISTINCT ON 每 (uid, attrId) 取 data_time 最大一行，单 SQL
-        禁 per-series N+1。data_time timestamptz 走 TimestamptzInstantTypeHandler（复用 AsmDataSampleResult
-        列集）。uids foreach IN 展开（snapshot 按设备清单批量取）。
-    -->
-    <select id="selectLatestSamples" resultMap="com.ecat.integration.EnvAirStationManagerIntegration.mapper.AsmDataSampleMapper.AsmDataSampleResult">
-        SELECT DISTINCT ON (logic_device_unique_id, attr_id)
-               logic_device_unique_id, attr_id, data_time, value_num, value_text, unit, source
-        FROM asm_data_sample
-        WHERE logic_device_unique_id IN
-        <foreach collection="uids" item="uid" open="(" separator="," close=")">
-            #{uid}
-        </foreach>
-        ORDER BY logic_device_unique_id, attr_id, data_time DESC
-    </select>
 </mapper>

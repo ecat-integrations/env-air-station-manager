@@ -3,26 +3,6 @@
 <mapper namespace="com.ecat.integration.EnvAirStationManagerIntegration.mapper.AsmDataSampleMapper">
 
     <!--
-        raw 明细 resultMap。data_time 是 timestamptz：结果侧经 TimestamptzInstantTypeHandler
-        （OffsetDateTime 中转，PG JDBC 42.x 拒隐式转换）；参数侧直绑 Instant（java.time setObject 支持）。
-        type 用 FQCN：AsmDataSample 故意不继承 BaseEntity（DynamicJarLoader 只对 domain/+BaseEntity 注册短别名），
-        短别名会 ClassNotFoundException 中断 SqlSessionFactory 构建（ADM 教训）。
-    -->
-    <resultMap type="com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmDataSample" id="AsmDataSampleResult">
-        <result property="logicDeviceUniqueId" column="logic_device_unique_id"/>
-        <result property="attrId"              column="attr_id"/>
-        <result property="dataTime"            column="data_time" typeHandler="com.ecat.integration.EnvAirStationManagerIntegration.support.TimestamptzInstantTypeHandler"/>
-        <result property="valueNum"            column="value_num"/>
-        <result property="valueText"           column="value_text"/>
-        <result property="unit"                column="unit"/>
-        <result property="source"              column="source"/>
-    </resultMap>
-
-    <sql id="cols">
-        logic_device_unique_id, attr_id, data_time, value_num, value_text, unit, source
-    </sql>
-
-    <!--
         批量 insert（consumer 攒批后调，foreach 多行 VALUES）。
         source：entity.source 非 null 时显式写入，否则走 DDL 默认 'POLL'（<if> 判空，避传 null 覆盖默认）。
         无 id 自增回填（hypertable 无自增 id 列，业务键 + data_time 即主键语义）。
@@ -41,13 +21,4 @@
              </choose>)
         </foreach>
     </insert>
-
-    <!-- 按 (logic_device, attr, 时间段) 查原始明细（回放/审计）；data_time 升序。 -->
-    <select id="selectByLogicAttrTimeRange" resultMap="AsmDataSampleResult">
-        select <include refid="cols"/> from asm_data_sample
-        where logic_device_unique_id = #{logicDeviceUniqueId}
-          and attr_id = #{attrId}
-          and data_time between #{from} and #{to}
-        order by data_time asc
-    </select>
 </mapper>

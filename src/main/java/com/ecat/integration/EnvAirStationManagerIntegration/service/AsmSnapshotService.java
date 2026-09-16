@@ -8,9 +8,7 @@ import com.ecat.core.State.UnitInfo;
 import com.ecat.integration.EnvAirStationManagerIntegration.support.AsmOnlineJudge;
 import com.ecat.integration.EnvAirStationManagerIntegration.controller.dto.AsmSnapshotAttrDto;
 import com.ecat.integration.EnvAirStationManagerIntegration.controller.dto.AsmSnapshotDeviceDto;
-import com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmDataSample;
 import com.ecat.integration.EnvAirStationManagerIntegration.controller.dto.AsmAlarmActiveDto;
-import com.ecat.integration.EnvAirStationManagerIntegration.mapper.AsmHistoryQueryMapper;
 import com.ecat.integration.EnvAirStationManagerIntegration.rule.AsmAlarmRegistry;
 import com.ecat.integration.EnvAirStationManagerIntegration.support.AsmUnitPurpose;
 import com.ecat.integration.logicdevice.LogicDevice.LogicDevice;
@@ -36,9 +34,10 @@ import java.util.Comparator;
  * {@link AttrState}，从 state 读 value/nativeUnit/lastUpdated——禁分别读 live attr 可变字段。
  * 值 + 单位经 {@link AsmUnitContract#resolveDisplay}（standard=STANDARD 行 / custom=MONITOR 行）统一出口换算。</p>
  *
- * <p><b>live 优先 / raw 回放兜</b>（设计 §4：snapshot 用 raw 最新值查询）：live state 为 null 或无值
- * （设备注册未喂数/重启后未到首帧）的 attr 用 {@code asm_data_sample} 每 series 最新样本回填
- * （source=RAW 标记），两路都有值时恒 LIVE。</p>
+ * <p><b>live 唯一源、无值=无数据</b>（2026-09-16 定案，raw 最新值回放查询已整条删除）：live state
+ * 为 null 或无值（设备注册未喂数/重启后未到首帧/命令类参数恒无值）的 attr 出 DEF 占位行（前端显 '-'），
+ * 不回查 {@code asm_data_sample}——生产该回放查询报 PSQLException（missing operator）致 snapshot
+ * 整链失败，处置即删除查询、快照只读内存 live 态。</p>
  *
  * @author coffee
  */
@@ -53,9 +52,8 @@ public class AsmSnapshotService {
     static final String ALARM_STATUS_NORMAL_KEY =
             com.ecat.integration.logicdevice.Meta.AttrIdDevice.SharedStatus.AlarmStatusOptions.NORMAL;
 
-    /** 值来源标记：LIVE=总线实时态 / RAW=raw 表最新值回放 / DEF=仅有定义尚无任何值（占位行）。 */
+    /** 值来源标记：LIVE=总线实时态 / DEF=仅有定义尚无任何值（占位行，按无数据处理显 '-'）。 */
     static final String SOURCE_LIVE = "LIVE";
-    static final String SOURCE_RAW = "RAW";
     static final String SOURCE_DEF = "DEF";
 
     /**
@@ -131,17 +129,15 @@ public class AsmSnapshotService {
         return "custom".equals(unit) ? AsmUnitPurpose.MONITOR : AsmUnitPurpose.STANDARD;
     }
 
-    private final AsmHistoryQueryMapper historyMapper;
     private final AsmUnitContract unitContract;
     private final AsmAlarmRegistry alarmRegistry;
 
     /**
      * 全部现存站房设备的当前态快照（registry 无站房设备时返空列表）。
      *
-     * <p><b>批量化（性能）</b>：DB 访问全部收敛为「一次单位契约批量预载 + 至多一次 raw 批量预取」，
-     * 替代逐设备串行往返——站房 37 设备量级下，远程库逐 uid 往返（实测 30~140ms/次）曾把单次
-     * snapshot 推到 1.4~7.5s。缺值设备占比 100% 时旧优化（anyMissing 短路）从不生效：每台站房设备
-     * 都有至少一个「已定义但从未有值」的 attr（命令类/未绑定槽位），raw 预取退化为 37 连查。</p>
+     * <p><b>批量化（性能）</b>：DB 访问收敛为一次单位契约批量预载（IN 全 uid，负结果入缓存），
+     * 行构建纯内存零样本查询——远程库逐 uid 往返（实测 30~140ms/次）曾把单次 snapshot 推到
+     * 1.4~7.5s。缺值 attr 不回查 raw 表（live 唯一源，见类注释），无值=无数据 DEF 占位。</p>
      *
      * @param unit 显示单位模式（standard=STANDARD 行标准口径 / custom=MONITOR 偏好；解析见 {@link #purposeForUnit}）
      */
@@ -160,32 +156,18 @@ public class AsmSnapshotService {
             uids.add(device.getUniqueId());
         }
         unitContract.preload(uids);
-        // 第一段：live 行收集（纯内存），同时标记缺值设备
-        List<Draft> drafts = new ArrayList<>(stations.size());
+        // live 行收集（纯内存）+ DEF 占位补齐排序 + 设备 DTO 组装
+        List<AsmSnapshotDeviceDto> out = new ArrayList<>(stations.size());
         for (LogicDevice device : stations) {
-            drafts.add(collectLive(device, purpose));
-        }
-        // 第二段：缺值设备 raw 最新样本一次 IN 批量预取（全 live 时零 raw SQL，语义同旧逐台短路）
-        List<String> missingUids = new ArrayList<>();
-        for (Draft d : drafts) {
-            if (d.anyMissing) {
-                missingUids.add(d.uid);
-            }
-        }
-        Map<String, List<AsmDataSample>> rawByUid = missingUids.isEmpty()
-                ? Collections.<String, List<AsmDataSample>>emptyMap()
-                : rawLatestBatch(missingUids);
-        // 第三段：raw 回放合并 + DEF 占位补齐 + 排序 + 设备 DTO 组装
-        List<AsmSnapshotDeviceDto> out = new ArrayList<>(drafts.size());
-        for (Draft d : drafts) {
-            AsmOnlineJudge.Judgement online = AsmOnlineJudge.judge(d.device.getAttrs(), Instant.now());
+            Draft d = collectLive(device, purpose);
+            AsmOnlineJudge.Judgement online = AsmOnlineJudge.judge(device.getAttrs(), Instant.now());
             out.add(AsmSnapshotDeviceDto.builder()
                     .logicDeviceUniqueId(d.uid)
-                    .displayName(d.device.getName())
+                    .displayName(device.getName())
                     .online(online.isOnline())
                     .offlineMs(online.getOfflineMs())
-                    .attrs(finishRows(d, rawByUid.getOrDefault(d.uid, Collections.<AsmDataSample>emptyList()), purpose))
-                    .activeAlarms(buildActiveAlarms(d.device, d.uid))
+                    .attrs(finishRows(d))
+                    .activeAlarms(buildActiveAlarms(device, d.uid))
                     .build());
         }
         return out;
@@ -211,24 +193,21 @@ public class AsmSnapshotService {
         for (LogicDevice device : LogicDeviceManager.getInstance().getRegisteredDevices()) {
             if (uid.equals(device.getUniqueId()) && uid.startsWith(STATION_UID_PREFIX)) {
                 unitContract.preload(Collections.singletonList(uid));
-                Draft d = collectLive(device, purpose);
-                List<AsmDataSample> raw = d.anyMissing ? rawLatest(uid) : Collections.<AsmDataSample>emptyList();
-                return finishRows(d, raw, purpose);
+                return finishRows(collectLive(device, purpose));
             }
         }
         return Collections.emptyList();
     }
 
     /**
-     * 单设备行构建中间态：live 行已收集（纯内存），缺值标记待 raw 预取后由
-     * {@link #finishRows} 合并——buildAll 批量预取与 buildForUid 单查共用同一三段式。
+     * 单设备行构建中间态：live 行已收集（纯内存），占位补齐由 {@link #finishRows} 完成——
+     * buildAll 与 buildForUid 共用同一两段式。
      */
     private static final class Draft {
         final LogicDevice device;
         final String uid;
         final Map<String, LogicAttributeDefine> defs;
         final Map<String, AsmSnapshotAttrDto> rows = new HashMap<>();
-        boolean anyMissing;
 
         Draft(LogicDevice device, String uid, Map<String, LogicAttributeDefine> defs) {
             this.device = device;
@@ -238,8 +217,8 @@ public class AsmSnapshotService {
     }
 
     /**
-     * 第一段：遍历 live attrs 收集有值行（live state 优先，撕裂读契约同前）；无值 attr 只置
-     * missing 标记不落行（raw 回放/DEF 占位由 finishRows 决定）。
+     * 第一段：遍历 live attrs 收集有值行（撕裂读契约同前）；无值 attr 不落行
+     * （DEF 占位由 finishRows 按 def 补）。
      */
     private Draft collectLive(LogicDevice device, AsmUnitPurpose purpose) {
         String uid = device.getUniqueId();
@@ -249,25 +228,16 @@ public class AsmSnapshotService {
             AttrState<?> state = e.getValue().getState();
             if (state != null && state.getValue() != null) {
                 d.rows.put(attrId, liveRow(uid, attrId, state, d.defs.get(attrId), purpose));
-            } else {
-                d.anyMissing = true;
             }
         }
         return d;
     }
 
     /**
-     * 第三段：raw 最新样本回放合并（live 已有的 attr 让位）→ 按 attr def 补占位行（已定义但
-     * live/raw 均无值，如未绑定的 ai_running——瓦片 catalog 与抽屉同集，缺值行前端显 '-'，不隐行）
-     * → 抽屉序排序。
+     * 第二段：按 attr def 补占位行（已定义但 live 无值，如命令类/未绑定的 ai_running——
+     * 无数据语义，瓦片 catalog 与抽屉同集，缺值行前端显 '-'，不隐行）→ 抽屉序排序。
      */
-    private List<AsmSnapshotAttrDto> finishRows(Draft d, List<AsmDataSample> rawSamples, AsmUnitPurpose purpose) {
-        for (AsmDataSample sample : rawSamples) {
-            if (d.rows.containsKey(sample.getAttrId())) {
-                continue;  // 已有 live 值（防御批量预取与 live 收集窗口间的数据竞争）
-            }
-            d.rows.put(sample.getAttrId(), rawRow(d.uid, sample, d.defs.get(sample.getAttrId()), purpose));
-        }
+    private List<AsmSnapshotAttrDto> finishRows(Draft d) {
         for (LogicAttributeDefine def : d.defs.values()) {
             if (!d.rows.containsKey(def.getAttrId())) {
                 d.rows.put(def.getAttrId(), defRow(def));
@@ -311,35 +281,9 @@ public class AsmSnapshotService {
                 .build();
     }
 
-    /** raw 回放行：valueNum 数值经 purpose 出口换算 + 展示修约（源=样本 unit 列），valueText 原样。 */
-    private AsmSnapshotAttrDto rawRow(String uid, AsmDataSample sample, LogicAttributeDefine def, AsmUnitPurpose purpose) {
-        String name = displayName(sample.getAttrId(), def);
-        if (sample.getValueNum() != null) {
-            AsmDisplayValue display = unitContract.resolveDisplay(purpose,
-                    uid, sample.getAttrId(), sample.getValueNum().doubleValue(), sample.getUnit());
-            return AsmSnapshotAttrDto.builder()
-                    .attrId(sample.getAttrId()).displayName(name)
-                    .value(AsmDisplayRounder.round(display.getValue(),
-                            monitorPrecision(uid, sample.getAttrId(), def)))
-                    .unit(AsmUnitContract.unitSymbol(display.getUnit()))
-                    .unitKey(display.getUnit())
-                    .displayPrecision(AsmDisplayRounder.resolvePrecision(
-                            unitContract.monitorDisplayPrecision(uid, sample.getAttrId()), displayPrecision(def)))
-                    .unitOptions(AsmUnitOptionCatalog.groupsFor(sample.getUnit()))
-                    .updateTime(sample.getDataTime()).source(SOURCE_RAW)
-                    .attrGroup(attrGroup(sample.getAttrId(), def))
-                    .build();
-        }
-        return AsmSnapshotAttrDto.builder()
-                .attrId(sample.getAttrId()).displayName(name).valueText(sample.getValueText())
-                .updateTime(sample.getDataTime()).source(SOURCE_RAW)
-                .attrGroup(attrGroup(sample.getAttrId(), def))
-                .build();
-    }
-
     /**
-     * 占位行：attr 已定义（mapping def）但 live/raw 均无值（如未绑定的 ai_running）。
-     * value/valueText/updateTime/statusName 全 null——前端显 '-'，瓦片与抽屉同集同源。
+     * 占位行：attr 已定义（mapping def）但 live 无值（如命令类/未绑定的 ai_running）。
+     * value/valueText/updateTime/statusName 全 null——无数据语义，前端显 '-'，瓦片与抽屉同集同源。
      */
     private static AsmSnapshotAttrDto defRow(LogicAttributeDefine def) {
         return AsmSnapshotAttrDto.builder()
@@ -422,24 +366,6 @@ public class AsmSnapshotService {
                             .build());
         }
         return new ArrayList<>(out.values());
-    }
-
-    private List<AsmDataSample> rawLatest(String uid) {
-        List<AsmDataSample> rows = historyMapper.selectLatestSamples(
-                Collections.singletonList(uid));
-        return rows != null ? rows : Collections.<AsmDataSample>emptyList();
-    }
-
-    /** 批量 raw 最新样本：一次 IN 查询（全部缺值 uid）结果按 uid 分组回各设备；null 行集按空处理。 */
-    private Map<String, List<AsmDataSample>> rawLatestBatch(List<String> uids) {
-        List<AsmDataSample> rows = historyMapper.selectLatestSamples(uids);
-        Map<String, List<AsmDataSample>> byUid = new HashMap<>();
-        if (rows != null) {
-            for (AsmDataSample sample : rows) {
-                byUid.computeIfAbsent(sample.getLogicDeviceUniqueId(), k -> new ArrayList<>()).add(sample);
-            }
-        }
-        return byUid;
     }
 
     private static String unitKey(UnitInfo unit) {

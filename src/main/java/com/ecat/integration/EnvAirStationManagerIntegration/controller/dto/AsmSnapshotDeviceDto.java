@@ -26,7 +26,7 @@ public class AsmSnapshotDeviceDto {
     /** 离线时长毫秒（now-lastUpdate；null=从未喂数时长未知；在线时也有值）。 */
     Long offlineMs;
 
-    /** 全属性当前态（live 优先，raw 回放兜）。 */
+    /** 全属性当前态（live 唯一源；无值 attr=DEF 占位行显 '-'）。 */
     List<AsmSnapshotAttrDto> attrs;
 
     /** 活跃报警明细（两源并集；空列表=无报警）。卡片报警徽章=前端对全 attr statuses 求并集（ADM 同构），无设备级 alarm boolean——SSE 增量帧只覆 attr 级字段，结构性杜绝「帧 alarm=false 覆盖 snapshot true」的撕裂。 */

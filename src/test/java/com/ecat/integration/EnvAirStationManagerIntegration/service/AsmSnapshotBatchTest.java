@@ -11,8 +11,6 @@ import com.ecat.core.State.AttributeClass;
 import com.ecat.core.State.AttrState;
 import com.ecat.integration.EnvAirStationManagerIntegration.controller.dto.AsmSnapshotAttrDto;
 import com.ecat.integration.EnvAirStationManagerIntegration.controller.dto.AsmSnapshotDeviceDto;
-import com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmDataSample;
-import com.ecat.integration.EnvAirStationManagerIntegration.mapper.AsmHistoryQueryMapper;
 import com.ecat.integration.EnvAirStationManagerIntegration.rule.AsmAlarmRegistry;
 import com.ecat.integration.logicdevice.LogicDevice.LogicDevice;
 import com.ecat.integration.logicdevice.LogicDeviceManager;
@@ -30,24 +28,22 @@ import org.mockito.quality.Strictness;
 
 import java.time.Instant;
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.mockito.ArgumentMatchers.anyList;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.mockito.Mockito.lenient;
-import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
 
 /**
- * snapshot 批量化 TDD（raw 预取 N 合 1 + 单位契约批量预载）：buildAll 对多缺值设备必须
- * <b>恰好一次</b> raw 批量查询（IN 全部缺值 uid）+ 恰好一次 preload，替代逐设备串行往返
- * （远程库实测每 uid 30~140ms，37 设备串行 = 秒级页面首载税）。真实 registry 注册设备
- * （同 AsmSnapshotAlarmTest 模式），禁 sleep 全同步。
+ * snapshot 纯内存语义护栏（2026-09-16 定案）：快照只读 registry live 态，<b>无值参数按无数据处理</b>
+ * （DEF 占位行，前端显 '-'，SDK 侧 value/valueText/updateTime 为 null），不回查 asm_data_sample——
+ * raw 回放查询已整条删除（回放曾在压缩 chunk 上踩 TimescaleDB 兼容性雷，且命令类/未绑定参数
+ * 恒缺值使回放每分钟必发必炸）。本测试锁两件事：缺值出 DEF 占位、live 值原样透出。
+ * 真实 registry 注册设备（禁 sleep 全同步）。
  *
  * @author coffee
  */
@@ -60,8 +56,6 @@ class AsmSnapshotBatchTest {
     private static final String UID_B = "logicdevice_station.valve_group.co";
 
     @Mock
-    private AsmHistoryQueryMapper historyMapper;
-    @Mock
     private AsmUnitContract unitContract;
 
     private AsmSnapshotService service;
@@ -70,7 +64,7 @@ class AsmSnapshotBatchTest {
 
     @BeforeEach
     void setUp() {
-        service = new AsmSnapshotService(historyMapper, unitContract, new AsmAlarmRegistry());
+        service = new AsmSnapshotService(unitContract, new AsmAlarmRegistry());
         // registry 装配一次；多设备注册只 add 不 reset（reset 会抹掉已注册设备）
         deviceRegistry = new DeviceRegistry();
         busRegistry = new BusRegistry();
@@ -86,8 +80,8 @@ class AsmSnapshotBatchTest {
     }
 
     /**
-     * 注册一台站房设备：live 文本 attr（有值）+ def 占位 attr（无值→anyMissing 恒真）。
-     * 不走数值路径（避免 unitContract mock 桩面），本测试只锁批量查询次数与分组正确性。
+     * 注册一台站房设备：live 文本 attr（有值）+ def 占位 attr（无值——命令类/未绑定参数的常态）。
+     * 不走数值路径（避免 unitContract mock 桩面），本测试只锁「缺值=DEF 占位、有值=LIVE」语义。
      */
     private void registerStationDevice(String uid, String name) {
         DeviceRegistry registry = deviceRegistry;
@@ -103,7 +97,7 @@ class AsmSnapshotBatchTest {
             @Override public List<LogicAttributeDefine> getAttrDefs() {
                 return Arrays.asList(
                         new LogicAttributeDefine("online", AttributeClass.TEXT, null, null, 0, false, String.class),
-                        // def 占位：定义了但从未有值 → buildAll 必须为该设备预取 raw
+                        // def 占位：定义了但从未有值 → 快照按无数据处理出 DEF 占位行
                         new LogicAttributeDefine("ai_running", AttributeClass.TEXT, null, null, 0, false, String.class));
             }
             @Override protected String getMappingType() { return "TEST-ASM"; }
@@ -126,7 +120,7 @@ class AsmSnapshotBatchTest {
                 .lastUpdated(T0)
                 .build()).when(onlineAttr).getState();
         device.setAttribute(onlineAttr);
-        // 生产形态：attr 已注册但从未喂数（state 值 null）→ buildAll 必须为该设备预取 raw 回放
+        // 生产常态：attr 已注册但从未喂数（state 值 null）→ 快照出 DEF 占位行，不查库
         AttributeBase<?> pendingAttr = org.mockito.Mockito.mock(AttributeBase.class);
         lenient().when(pendingAttr.getAttributeID()).thenReturn("ai_running");
         lenient().doReturn(AttrState.builder()
@@ -146,51 +140,50 @@ class AsmSnapshotBatchTest {
                 EventContext.root(EventContext.Source.SYSTEM, null)));
     }
 
-    private static AsmDataSample sample(String uid, String attrId, String text) {
-        return AsmDataSample.builder()
-                .logicDeviceUniqueId(uid).attrId(attrId)
-                .dataTime(T0).valueText(text).source("RAW")
-                .build();
-    }
-
     @Test
-    void buildAll_missingDevices_queriedRawExactlyOnceWithAllUids() {
+    void buildAll_valuelessAttrs_yieldDefPlaceholders_liveValuesPassThrough() {
         registerStationDevice(UID_A, "cam1");
         registerStationDevice(UID_B, "valve1");
-        when(historyMapper.selectLatestSamples(anyList())).thenReturn(Collections.emptyList());
 
         List<AsmSnapshotDeviceDto> out = service.buildAll(null);
         assertEquals(2, out.size());
-        // 恰好一次批量查询，且 IN 集合含全部缺值 uid（旧实现逐设备 singletonList → 必红）
-        verify(historyMapper, times(1)).selectLatestSamples(anyList());
-        verify(historyMapper, never()).selectLatestSamples(Collections.singletonList(UID_A));
-        verify(historyMapper, times(1)).selectLatestSamples(org.mockito.ArgumentMatchers.argThat(
-                (List<String> c) -> c.size() == 2 && c.contains(UID_A) && c.contains(UID_B)));
-    }
-
-    @Test
-    void buildAll_rawSamplesGroupedBackToOwnDevice() {
-        registerStationDevice(UID_A, "cam1");
-        registerStationDevice(UID_B, "valve1");
-        when(historyMapper.selectLatestSamples(anyList())).thenReturn(Arrays.asList(
-                sample(UID_A, "ai_running", "running-a"),
-                sample(UID_B, "ai_running", "running-b")));
-
-        List<AsmSnapshotDeviceDto> out = service.buildAll(null);
         Map<String, AsmSnapshotDeviceDto> byUid = new HashMap<>();
         for (AsmSnapshotDeviceDto d : out) {
             byUid.put(d.getLogicDeviceUniqueId(), d);
         }
-        assertEquals("running-a", rowOf(byUid.get(UID_A), "ai_running").getValueText());
-        assertEquals("running-b", rowOf(byUid.get(UID_B), "ai_running").getValueText());
-        assertEquals("RAW", rowOf(byUid.get(UID_A), "ai_running").getSource());
+        // live 值原样透出
+        for (String uid : Arrays.asList(UID_A, UID_B)) {
+            AsmSnapshotAttrDto live = rowOf(byUid.get(uid), "online");
+            assertEquals("LIVE", live.getSource());
+            // 文本行走 displayValue（撕裂读契约：state 一次性快照的展示串）
+            assertEquals("在线", live.getValueText());
+            assertEquals(T0, live.getUpdateTime());
+            // 无值参数=无数据：DEF 占位行，值/时刻全空（前端显 '-'），不回查历史表
+            AsmSnapshotAttrDto def = rowOf(byUid.get(uid), "ai_running");
+            assertEquals("DEF", def.getSource());
+            assertNull(def.getValue());
+            assertNull(def.getValueText());
+            assertNull(def.getUpdateTime());
+        }
+    }
+
+    @Test
+    void buildForUid_valuelessAttr_defPlaceholder() {
+        registerStationDevice(UID_A, "cam1");
+
+        List<AsmSnapshotAttrDto> out = service.buildForUid(UID_A);
+        AsmSnapshotAttrDto live = rowOf(out, "online");
+        assertEquals("LIVE", live.getSource());
+        assertEquals("在线", live.getValueText());
+        AsmSnapshotAttrDto def = rowOf(out, "ai_running");
+        assertEquals("DEF", def.getSource());
+        assertNull(def.getValueText());
     }
 
     @Test
     void buildAll_preloadsUnitContractOnceWithAllUids() {
         registerStationDevice(UID_A, "cam1");
         registerStationDevice(UID_B, "valve1");
-        when(historyMapper.selectLatestSamples(anyList())).thenReturn(Collections.emptyList());
 
         service.buildAll(null);
         // 单位契约批量预载：一次 IN 查询全 uid（含负结果 uid 入缓存，杀逐 attr 直查税）
@@ -200,6 +193,12 @@ class AsmSnapshotBatchTest {
 
     private static AsmSnapshotAttrDto rowOf(AsmSnapshotDeviceDto device, String attrId) {
         return device.getAttrs().stream()
+                .filter(a -> attrId.equals(a.getAttrId()))
+                .findFirst().orElseThrow(() -> new AssertionError("attr 不存在: " + attrId));
+    }
+
+    private static AsmSnapshotAttrDto rowOf(List<AsmSnapshotAttrDto> rows, String attrId) {
+        return rows.stream()
                 .filter(a -> attrId.equals(a.getAttrId()))
                 .findFirst().orElseThrow(() -> new AssertionError("attr 不存在: " + attrId));
     }

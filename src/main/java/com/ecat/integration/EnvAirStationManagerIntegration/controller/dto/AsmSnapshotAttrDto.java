@@ -7,7 +7,7 @@ import lombok.Value;
 import java.time.Instant;
 
 /**
- * snapshot 单属性行——live 实时态优先，raw 最新值回放兜（live state null/无值时）。
+ * snapshot 单属性行——live 实时态；无值 attr=DEF 占位行（无数据语义，前端显 '-'）。
  *
  * @author coffee
  */
@@ -33,13 +33,13 @@ public class AsmSnapshotAttrDto {
     /** 该值时刻（LIVE=state.lastUpdated / RAW=样本 data_time）。 */
     Instant updateTime;
 
-    /** 主状态中文名（AttributeStatus.getDescription；RAW 回放行为 null）。 */
+    /** 主状态中文名（AttributeStatus.getDescription；DEF 占位行为 null）。 */
     String statusName;
 
     /** 状态枚举 key（AttributeStatus.name()，如 NORMAL/ALARM；前端着色按本 key 映射，不按中文串）。 */
     String status;
 
-    /** 值来源：LIVE（总线实时态）/ RAW（asm_data_sample 最新值回放）/ DEF（仅有定义无任何值）。 */
+    /** 值来源：LIVE（总线实时态）/ DEF（仅有定义无任何值，无数据占位行）。 */
     String source;
 
     /**

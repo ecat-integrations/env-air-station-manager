@@ -130,13 +130,10 @@ class AsmHistoryQueryMapperSqlShapeTest {
 
     @Test
     void historyMapperXmlMustParseAndCountStatementMustBind() throws Exception {
-        // 真实 MyBatis 解析（无 DB）：selectLatestSamples 引用 AsmDataSampleMapper 的 resultMap，须先装载
+        // 真实 MyBatis 解析（无 DB）：本 mapper 自包含（raw 最新值语句删除后不再引用跨 mapper resultMap）
         Configuration configuration = new Configuration();
         configuration.setMapUnderscoreToCamelCase(true);
         configuration.addMapper(AsmHistoryQueryMapper.class);
-        try (InputStream in = Resources.getResourceAsStream("mapper/AsmDataSampleMapper.xml")) {
-            new XMLMapperBuilder(in, configuration, "AsmDataSampleMapper.xml", configuration.getSqlFragments()).parse();
-        }
         try (InputStream in = Resources.getResourceAsStream("mapper/AsmHistoryQueryMapper.xml")) {
             new XMLMapperBuilder(in, configuration, "AsmHistoryQueryMapper.xml", configuration.getSqlFragments()).parse();
         }
@@ -171,11 +168,16 @@ class AsmHistoryQueryMapperSqlShapeTest {
     }
 
     @Test
-    void latestRawMustUseDistinctOnPerSeries() {
+    void rawLatestSelectMustStayDeleted() {
         String xml = loadXml();
-        // snapshot 的 raw 最新值回放：每 series 取 data_time 最大一行（DISTINCT ON 单 SQL，禁 per-series N+1）
-        assertTrue(xml.contains("DISTINCT ON (logic_device_unique_id, attr_id)"),
-                "raw 最新值查询须 DISTINCT ON (uid, attr_id) 单 SQL");
+        // raw 最新值回放已定案整条删除（2026-09-16）：快照 live 唯一源、无值=无数据（DEF 占位行显 '-'），
+        // 不回查 asm_data_sample。回放查询（DISTINCT ON + 多 varchar 排序列）在压缩 chunk 上触发
+        // TimescaleDB 通用计划算符缺失缺陷（生产已炸），且命令类/未绑定参数恒缺值使其每分钟必发。
+        // 护栏=这条语句不得以任何形态回魂。
+        assertFalse(xml.contains("selectLatestSamples"),
+                "selectLatestSamples 已废弃删除：快照不回查 raw 表（live 唯一源，无值=DEF 占位）");
+        assertFalse(xml.contains("DISTINCT ON"),
+                "DISTINCT ON(多 varchar 排序列) 形态在压缩 chunk 上有兼容性雷，禁止回魂");
     }
 
     @Test
