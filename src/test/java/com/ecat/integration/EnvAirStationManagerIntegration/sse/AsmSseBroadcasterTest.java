@@ -9,6 +9,7 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import java.io.IOException;
 import java.time.Duration;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -208,15 +209,20 @@ class AsmSseBroadcasterTest {
     /**
      * 174500 回归（bug-record-20260826-174500）：单条连接 send <b>永卡</b>（对端停读 → TCP 接收窗归零 →
      * servlet 阻塞 flush 无限等待，jstack 卡 NioEndpoint doWrite）不得钉死广播线程——单条 send 有界超时
-     * （默认 5s）后死连接摘除，健康连接继续收帧。与毒连接用例的本质差异：send 不抛异常（永远不返回），
+     * 后死连接摘除，健康连接继续收帧。与毒连接用例的本质差异：send 不抛异常（永远不返回），
      * 异常摘除路径（F-36）对它无效，只有超时摘除能救广播域。
      *
-     * <p>红（现状）：send 内联广播线程永卡 → 两次广播都排在其后永不执行 → healthy 8s 内收不到帧。</p>
+     * <p>红（现状）：send 内联广播线程永卡 → 两次广播都排在其后永不执行 → healthy 在断言窗内收不到帧。</p>
+     *
+     * <p>真实单线程广播 executor（覆盖投递即返 + 跨线程送达，与同步 executor 用例互补）+ 注入 300ms 短超时：
+     * 超时摘除的因果与超时具体取值无关，等真实默认 5s 只把满载并行下的调度抖动放大成 flake
+     * （bug-record-20260916-182800），默认值合理性由代码评审保证，不由测试干等证明。</p>
      */
     @Test
     @Timeout(value = 20)
     void broadcast_sendHangsForever_deadEvictedByTimeout_healthyStillServed() throws Exception {
-        AsmSseBroadcaster asyncBroadcaster = new AsmSseBroadcaster();
+        AsmSseBroadcaster asyncBroadcaster = new AsmSseBroadcaster(
+                Executors.newSingleThreadExecutor(), 300);
         CountDownLatch releaseStuck = new CountDownLatch(1);
         CountDownLatch healthyGot = new CountDownLatch(2);
         try {
@@ -236,8 +242,8 @@ class AsmSseBroadcasterTest {
             asyncBroadcaster.broadcast("{}");
             asyncBroadcaster.broadcast("{}");
 
-            assertTrue(healthyGot.await(8, TimeUnit.SECONDS),
-                    "stuck send 超时（默认 5s）摘除后，healthy 应继续收到两次广播帧");
+            assertTrue(healthyGot.await(2, TimeUnit.SECONDS),
+                    "stuck send 超时（注入 300ms）摘除后，healthy 应继续收到两次广播帧");
             assertFalse(asyncBroadcaster.isActive("stuck"), "send 永卡的死连接应被超时摘除");
         } finally {
             releaseStuck.countDown();
