@@ -343,8 +343,11 @@ class AsmStatAggregationEngineNonNumericTest {
                 minuteRow("2026-09-08T10:59:00Z", "normal", 1, 1)));
         when(statMapper.upsertHour(any(List.class))).thenReturn(1);
 
+        // now=窗端 11:00（生产接线 now=tick=窗端）：FRONT hour 桶尾=label+1h=11:00，now 须 ≥ 桶尾
+        // 该小时才按已闭合写入，否则整桶被右沿闭合滤除、无 upsert 可断言
         engine.materializeGranularity(AsmStatGranularity.HOUR,
-                Instant.parse("2026-09-08T10:00:00Z"), Instant.parse("2026-09-08T11:00:00Z"), "SCHEDULE", NOW);
+                Instant.parse("2026-09-08T10:00:00Z"), Instant.parse("2026-09-08T11:00:00Z"), "SCHEDULE",
+                Instant.parse("2026-09-08T11:00:00Z"));
 
         ArgumentCaptor<List<AsmStatBucket>> cap = bucketCaptor();
         verify(statMapper).upsertHour(cap.capture());
@@ -366,8 +369,10 @@ class AsmStatAggregationEngineNonNumericTest {
                 minuteRow("2026-09-08T10:45:00Z", "normal", 2, 2)));
         when(statMapper.upsertHour(any(List.class))).thenReturn(1);
 
+        // now=窗端 11:00：同上——FRONT hour 桶尾 11:00 须 ≤ now 才已闭合可写
         engine.materializeGranularity(AsmStatGranularity.HOUR,
-                Instant.parse("2026-09-08T10:00:00Z"), Instant.parse("2026-09-08T11:00:00Z"), "SCHEDULE", NOW);
+                Instant.parse("2026-09-08T10:00:00Z"), Instant.parse("2026-09-08T11:00:00Z"), "SCHEDULE",
+                Instant.parse("2026-09-08T11:00:00Z"));
 
         ArgumentCaptor<List<AsmStatBucket>> cap = bucketCaptor();
         verify(statMapper).upsertHour(cap.capture());
@@ -402,8 +407,10 @@ class AsmStatAggregationEngineNonNumericTest {
                 minuteRow("2026-09-08T10:30:00Z", "cooling", 9, 9)));
         when(statMapper.upsertHour(any(List.class))).thenReturn(1);
 
+        // now=窗端 11:00：同上——FRONT hour 桶尾 11:00 须 ≤ now 才已闭合可写
         engine.materializeGranularity(AsmStatGranularity.HOUR,
-                Instant.parse("2026-09-08T10:00:00Z"), Instant.parse("2026-09-08T11:00:00Z"), "SCHEDULE", NOW);
+                Instant.parse("2026-09-08T10:00:00Z"), Instant.parse("2026-09-08T11:00:00Z"), "SCHEDULE",
+                Instant.parse("2026-09-08T11:00:00Z"));
 
         ArgumentCaptor<List<AsmStatBucket>> cap = bucketCaptor();
         verify(statMapper).upsertHour(cap.capture());

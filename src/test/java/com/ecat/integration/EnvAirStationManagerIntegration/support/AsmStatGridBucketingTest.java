@@ -5,10 +5,13 @@ import org.junit.jupiter.api.Test;
 import java.time.Instant;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * 桶切分边界归属单测——FRONT [S,E) 桶标=左沿 / BACK (L,R] 桶标=右沿（同 ADM 口径，ASM 自建）。
- * 锁死边界点归属：整点采样 FRONT 归左沿桶、BACK 归自身右沿桶，无歧义不重不漏。
+ * 锁死边界点归属：整点采样 FRONT 归左沿桶、BACK 归自身右沿桶，无歧义不重不漏；
+ * null 时刻显式 IllegalArgumentException（入参契约）。
  *
  * @author coffee
  */
@@ -59,5 +62,13 @@ class AsmStatGridBucketingTest {
                 AsmStatGridBucketing.truncateToGrid(T, AsmStatGranularity.HOUR, AsmIntervalMode.FRONT));
         assertEquals(Instant.parse("2026-08-18T11:00:00Z"),
                 AsmStatGridBucketing.truncateToGrid(T, AsmStatGranularity.HOUR, AsmIntervalMode.BACK));
+    }
+
+    @Test
+    void nullTime_throwsIllegalArgument() {
+        // 入参契约：null 时刻显式 IllegalArgumentException（非裸 NPE），不静默产出错误桶标
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                () -> AsmStatGridBucketing.truncateToGrid(null, AsmStatGranularity.MINUTE, AsmIntervalMode.FRONT));
+        assertTrue(ex.getMessage().contains("null"));
     }
 }

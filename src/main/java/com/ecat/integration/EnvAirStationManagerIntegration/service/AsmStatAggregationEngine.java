@@ -65,11 +65,15 @@ import java.util.Map;
  *
  * <p><b>mode 依赖 WHERE + 桶标</b>（单一真相源 {@link AsmIntervalMode} / {@link AsmStatGridBucketing}）：
  * FRONT [S,E) 桶标=左沿、WHERE {@code >= ? and < ?}；BACK (L,R] 桶标=右沿、WHERE {@code > ? and <= ?}。
- * 子桶 fetch 恒带 {@code interval_mode = code} 过滤（级联 mode 自洽：FRONT 子桶→FRONT 父桶）。</p>
+ * 子桶 fetch 恒带 {@code interval_mode = code} 过滤（级联 mode 自洽：FRONT 子桶→FRONT 父桶）；
+ * fetch 上界钳制 gridFloor(now)——WHERE 开闭天然承载桶完整性（BACK 含等收边界桶 / FRONT 排等
+ * 排进行中桶），未完桶不进聚合。入口左沿网格对齐 + 此处右沿 now 闭合对称构成
+ * 「重算窗 = 完整网格桶集合且全部已闭合」。</p>
  *
  * <p><b>计算审计</b>：每 (粒度, mode) 物化写一行 asm_stat_compute_log（SUCCESS 记 bucketCount /
  * FAILED 记 error 后上抛）；单 series 失败隔离跳过（其余 series 继续），全 series 失败才整体 FAILED+上抛。
- * 时间源注入（{@code now} 参数）——调度/测试传同一 Instant 确定性落 started/ended，无隐式时钟。</p>
+ * 时间源注入（{@code now} 参数）——调度/测试传同一 Instant 确定性落 started/ended，无隐式时钟；
+ * 同一 now 也是 fetch 右沿闭合的钳制基准（上界 = min(we+pad, gridFloor(now))，进行中桶不进聚合）。</p>
  *
  * @author coffee
  */
@@ -77,7 +81,13 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class AsmStatAggregationEngine {
 
-    /** fetch 扩窗宽度：每端外扩 1 个该粒度桶（覆盖首/末桶被窗口边界部分覆盖的情形；upsert 幂等多覆盖无害）。 */
+    /**
+     * fetch 扩窗宽度：每端外扩 1 个该粒度桶（覆盖网格错位下首/末桶被窗口边界部分覆盖的情形）。
+     * 左扩恒为纯保险；右扩受 now 闭合钳制（上界 = min(we+pad, gridFloor(now))）——历史重算窗
+     * 保留右扩保险，会越过 now 的右扩被钳回最后一个完整桶边界，永不触及进行中的桶。
+     * upsert 幂等覆写无害的前提是<b>完整证据重算</b>：入口网格对齐保证重算桶成员全集，
+     * 右沿 now 闭合保证只算已闭合桶（幂等覆盖≠无害写入）。
+     */
     private static final int FETCH_PAD_BUCKETS = 1;
 
     /** ALARM series 的报警态值串（raw 层 value_text 值域 normal/alarm；字面量判定，拼写由引擎单测锁死）。 */
@@ -102,7 +112,8 @@ public class AsmStatAggregationEngine {
      * @param windowStart  原始数据范围左端（UTC；fetch 自动左扩 1 桶；开闭由 mode 定）
      * @param windowEnd    原始数据范围右端（UTC；fetch 自动右扩 1 桶）
      * @param triggerSource 触发源（compute_log.trigger_source：SCHEDULE/RECONFIG/MANUAL）
-     * @param now          时间源（审计 started/ended 落此值；调用方注入保证确定性）
+     * @param now          时间源（fetch 右沿闭合钳制基准 gridFloor(now) + 审计 started/ended 落此值；
+     *                     调度器传 tick 时刻——进行中桶不进聚合，调用方注入保证确定性）
      * @return 各 mode 物化产出桶行数之和
      */
     public int materializeGranularity(AsmStatGranularity granularity, Instant windowStart, Instant windowEnd,
@@ -154,7 +165,7 @@ public class AsmStatAggregationEngine {
         RuntimeException firstFailure = null;
         for (AsmConfigStat cfg : series) {
             try {
-                bucketCount += materializeOneSeries(gran, mode, cfg, ws, we);
+                bucketCount += materializeOneSeries(gran, mode, cfg, ws, we, now);
             } catch (RuntimeException e) {
                 // per-series 隔离：单 series 异常（数据/配置形态问题）不杀同粒度其余 series；
                 // 失败 series 缺口由修复后下个 tick 补（upsert 幂等）。全灭才整体 FAILED+上抛。
@@ -177,12 +188,25 @@ public class AsmStatAggregationEngine {
         return bucketCount;
     }
 
-    /** 单 series 一轮：fetch（扩窗 1 桶）→ kind 分流聚合 → upsert。空产出（无源行/全空桶）返 0。 */
+    /**
+     * 单 series 一轮：fetch（左扩 1 桶 + 右沿钳制 gridFloor(now)）→ kind 分流聚合 → upsert。
+     * 空产出（无源行/全空桶）返 0。fetch 侧右沿闭合后聚合输入恒为已闭合桶的成员全集——
+     * 未完桶从取数起就不存在（不是算完再滤）。
+     */
     private int materializeOneSeries(AsmStatGranularity gran, AsmIntervalMode mode,
-                                     AsmConfigStat cfg, Instant ws, Instant we) {
+                                     AsmConfigStat cfg, Instant ws, Instant we, Instant now) {
         Duration pad = gran.interval().multipliedBy(FETCH_PAD_BUCKETS);
         Instant fetchStart = ws.minus(pad);
-        Instant fetchEnd = we.plus(pad);
+        // 右沿闭合（fetch 侧）：上界 = min(we+pad, gridFloor(now))。BACK label L 完整 ⟺ L ≤ now ⟺
+        // 成员 t ≤ gridFloor(now)（WHERE 含等恰使边界桶 label==gridFloor(now) 的成员全量入内）；
+        // FRONT label S 完整 ⟺ S+interval ≤ now ⟺ 成员 t < gridFloor(now)（WHERE 排等天然排除
+        // 进行中桶成员）——完整性判定由各 mode 的 WHERE 开闭承载，一个 frontier、零特判。
+        // 取小使历史重算窗（we+pad 不越 now）保留右扩保险，只有会越过 now 的右扩被钳回。
+        // 附带收益：库中遗留的未来时间戳子行（&gt; now，旧版本写入的脏行）同被前沿挡在 fetch 外，
+        // 父桶聚合不被污染。
+        Instant paddedEnd = we.plus(pad);
+        Instant lastClosedEdge = AsmStatGridBucketing.truncateToGrid(now, gran, AsmIntervalMode.FRONT);
+        Instant fetchEnd = paddedEnd.isBefore(lastClosedEdge) ? paddedEnd : lastClosedEdge;
         AsmStatSeriesKind kind = AsmStatSeriesKindClassifier.kindOf(cfg.getAttrId());
         List<AsmStatBucket> buckets;
         if (gran == AsmStatGranularity.MINUTE) {
@@ -421,7 +445,7 @@ public class AsmStatAggregationEngine {
     /**
      * STATE 选样判据：候选距桶标更近者胜；等距取 dataTime 更新者。几何事实：分钟桶内样本恒在桶标
      * 同侧（FRONT 标=左沿 / BACK 标=右沿），|dataTime-桶标| 对不同 dataTime 严格单调——等距分支
-     * 仅在<b>同一 dataTime 的重复 raw 行</b>（raw 表主键为 bigserial id，允许同刻多行）时到达，
+     * 仅在<b>同一 dataTime 的重复 raw 行</b>（asm_data_sample 无主键约束，允许同刻多行）时到达，
      * 此时 isAfter 恒 false、保留首行；保留该分支是规则原文（等距取新）的逐字实现。
      */
     private static boolean nearerToLabel(AsmRawRow candidate, AsmRawRow incumbent, Instant label) {
