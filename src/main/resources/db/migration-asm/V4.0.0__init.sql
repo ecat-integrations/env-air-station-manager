@@ -5,6 +5,9 @@
 -- 来源拆分与逐表对账由十二域基线生成器产出,对账矩阵与差集记录随交付验收材料提供。
 -- 库：PG 主库 public schema（TimescaleDB）。幂等性说明：CREATE TABLE/INDEX IF NOT EXISTS、
 --   COMMENT、DO 块守卫、种子 insertIfAbsent 守卫均可重跑。
+-- 基准源指纹（sha256，提取日期 2026-10-04；源件随旧件清零删除，git 史可稽）：
+--   0f299fe7df7ecd32c1472a824ce20562d56ac6f22690f2811469b98026e21fd8  ecat-integrations/env-air-station-manager/src/main/resources/sql/asm_data.sql
+--   acab96a264358d95a81ebce7cf1d57889771e915b2a42f0404cd983335d302f6  ecat-integrations/env-air-station-manager/src/main/resources/sql/asm_auth.sql
 
 CREATE EXTENSION IF NOT EXISTS timescaledb;
 
