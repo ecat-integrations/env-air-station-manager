@@ -8,19 +8,19 @@
     <relativePath />
   </parent>
   <artifactId>integration-env-air-station-manager</artifactId>
-  <version>3.1.0</version>
+  <version>4.0.0</version>
   <name>integration-env-air-station-manager</name>
   <dependencies>
     <dependency>
       <groupId>com.ecat</groupId>
       <artifactId>ruoyi-system</artifactId>
-      <version>3.0.1</version>
+      <version>4.0.0</version>
       <scope>provided</scope>
     </dependency>
     <dependency>
       <groupId>com.ecat</groupId>
       <artifactId>ruoyi-framework</artifactId>
-      <version>3.0.1</version>
+      <version>4.0.0</version>
       <scope>provided</scope>
     </dependency>
     <dependency>
@@ -55,7 +55,7 @@
     <dependency>
       <groupId>com.ecat</groupId>
       <artifactId>integration-ecat-core-ruoyi</artifactId>
-      <version>3.0.0</version>
+      <version>4.0.0</version>
       <scope>provided</scope>
     </dependency>
     <dependency>
@@ -67,19 +67,19 @@
     <dependency>
       <groupId>com.ecat</groupId>
       <artifactId>ecat-core</artifactId>
-      <version>3.1.0</version>
+      <version>4.0.0</version>
       <scope>provided</scope>
     </dependency>
     <dependency>
       <groupId>com.ecat</groupId>
       <artifactId>integration-logicdevice</artifactId>
-      <version>3.1.0</version>
+      <version>4.0.0</version>
       <scope>provided</scope>
     </dependency>
     <dependency>
       <groupId>com.ecat</groupId>
       <artifactId>integration-logicdevice-airstation</artifactId>
-      <version>3.1.0</version>
+      <version>4.0.0</version>
       <scope>provided</scope>
     </dependency>
   </dependencies>
