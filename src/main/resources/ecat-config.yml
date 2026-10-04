@@ -11,6 +11,15 @@ dependencies:
   - artifactId: integration-logicdevice-airstation
     groupId: com.ecat
     version: ^3.0.0
+  - artifactId: integration-ecat-db-migration
+    groupId: com.ecat
+    version: ^4.0.0
 web-platform:
   ui: true
   api: true
+db:
+  domain: asm
+  engine: pg
+  mechanism: flyway
+  historyTable: flyway_schema_history_asm
+  dumpPolicy: "table-family:asm_alarm_record,asm_alarm_rule,asm_config_stat,asm_config_unit,asm_control_record,asm_data_sample,asm_device_change_record,asm_stat_5min,asm_stat_compute_log,asm_stat_hour,asm_stat_minute"

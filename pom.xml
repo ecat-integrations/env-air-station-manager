@@ -42,6 +42,11 @@
       <scope>test</scope>
     </dependency>
     <dependency>
+      <groupId>org.mockito</groupId>
+      <artifactId>mockito-inline</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-security</artifactId>
       <version>2.5.15</version>
@@ -51,6 +56,12 @@
       <groupId>com.ecat</groupId>
       <artifactId>integration-ecat-core-ruoyi</artifactId>
       <version>3.0.0</version>
+      <scope>provided</scope>
+    </dependency>
+    <dependency>
+      <groupId>com.ecat</groupId>
+      <artifactId>integration-ecat-db-migration</artifactId>
+      <version>4.0.0</version>
       <scope>provided</scope>
     </dependency>
     <dependency>
