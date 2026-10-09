@@ -2,8 +2,6 @@ package com.ecat.integration.EnvAirStationManagerIntegration;
 
 import java.net.URLClassLoader;
 import java.time.Instant;
-import java.util.Collections;
-import javax.sql.DataSource;
 
 import com.ecat.core.Bus.BusTopic;
 import com.ecat.core.Bus.consumer.BusConsumerBase;
@@ -13,7 +11,6 @@ import com.ecat.core.Task.runner.HostedExecutors;
 import com.ecat.core.Utils.Log;
 import com.ecat.core.Utils.LogFactory;
 import com.ecat.integration.EcatCoreRuoyiIntegration.EcatCoreRuoyiIntegration;
-import com.ecat.integration.EcatDbMigration.DbMigrationFacade;
 import com.ecat.integration.EnvAirStationManagerIntegration.api.AirStationSdk;
 import com.ecat.integration.EnvAirStationManagerIntegration.consumer.AsmAlarmRuleConsumer;
 import com.ecat.integration.EnvAirStationManagerIntegration.consumer.AsmDataSampleConsumer;
@@ -88,8 +85,6 @@ public class EnvAirStationManagerIntegration extends IntegrationBase {
     @Override
     public void onStart() {
 
-        // 域自迁移:先照账本补刀再启动任何写路径;失败=本域明确异常,不株连他域。
-        migrateOwnDomain();
         // ASM 模块工作道接线：道挂本集成（onRemove sweep 拆卸），须先于 @Service
         // bean 装配（bean 构造即 resolve()）。幂等 keep-first，disable→re-enable 重跑安全。
         AsmLanes.wireWorkLane(HostedExecutors.bounded(1, this));
@@ -254,40 +249,5 @@ public class EnvAirStationManagerIntegration extends IntegrationBase {
      */
     public AirStationSdk getAirStationSdk() {
         return mry.getSpringBean(AirStationSdkImpl.class);
-    }
-
-    /** 本域标识(与 ecat-config.yml db.domain、脚本目录 migration-&lt;domain&gt; 三处同名)。 */
-    private static final String DB_DOMAIN = "asm";
-
-    /** 本域迁移脚本目录(字面量写死,不做拼接——脚本目录名编译期可见)。 */
-    private static final String DB_LOCATION = "classpath:db/migration-asm";
-
-    /**
-     * 本域启动期自迁移:先照账本补刀,再装载/启动任何写路径(谁的地盘谁负责)。失败=本域明确异常。
-     * 两态接线:有账本表直接 migrate(幂等);无账本表先 baseline("0") 建账再 migrate(空库放行
-     * 全量;0 小于 4.0.0,V4.0.0 不被挡)。未接管存量库在 migrate 处撞已存在表显式报错(「该域
-     * 未接管」信号)——禁静默兜底。
-     * 资源扫描类加载器由门面经 resourceAnchor(本集成类字面量)取得——域脚本在本仓 jar 内,
-     * 唯此加载器可见;TCCL 由门面引擎侧处理,本调用方零线程状态操作。
-     */
-    void migrateOwnDomain() {
-        EcatCoreRuoyiIntegration bridge =
-                (EcatCoreRuoyiIntegration) integrationRegistry.getIntegration("integration-ecat-core-ruoyi");
-        if (bridge == null) {
-            throw new IllegalStateException("桥集成 integration-ecat-core-ruoyi 未注册,本域(" + DB_DOMAIN + ")迁移中止");
-        }
-        DataSource ds = bridge.getSpringBean(DataSource.class);
-        if (ds == null) {
-            throw new IllegalStateException("ruoyi Spring 容器未提供 DataSource Bean,本域(" + DB_DOMAIN + ")迁移中止");
-        }
-        if (DbMigrationFacade.hasHistoryTable(DB_DOMAIN, ds)) {
-            DbMigrationFacade.migrate(DB_DOMAIN, ds,
-                    Collections.singletonList(DB_LOCATION), EnvAirStationManagerIntegration.class);
-        } else {
-            DbMigrationFacade.baseline(DB_DOMAIN, ds, "0");
-            DbMigrationFacade.migrate(DB_DOMAIN, ds,
-                    Collections.singletonList(DB_LOCATION), EnvAirStationManagerIntegration.class);
-        }
-        log.info("域 {} 迁移完成", DB_DOMAIN);
     }
 }
