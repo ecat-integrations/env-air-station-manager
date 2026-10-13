@@ -289,18 +289,17 @@ COMMENT ON TABLE asm_device_change_record IS 'ASM 站房设备变更追溯(appen
 DO $$
 DECLARE
     p text;
-    mid bigint;
     parent bigint;
 BEGIN
     -- 隐藏父目录（visible='1' 隐藏，避与 module-config 菜单重复；仅作 perm 分组容器）
     SELECT menu_id INTO parent FROM sys_menu WHERE menu_name = '空气站房管理(权限)' AND menu_type = 'M';
     IF parent IS NULL THEN
-        parent := (SELECT coalesce(max(menu_id), 0) + 1 FROM sys_menu);
-        INSERT INTO sys_menu(menu_id, menu_name, parent_id, order_num, path, component, query, is_frame, is_cache,
+        INSERT INTO sys_menu(menu_name, parent_id, order_num, path, component, query, is_frame, is_cache,
                              menu_type, visible, status, perms, icon, create_time, update_time, remark)
-        VALUES (parent, '空气站房管理(权限)', 0, 91, 'asm-perm', NULL, '', 1, 0,
+        VALUES ('空气站房管理(权限)', 0, 91, 'asm-perm', NULL, '', 1, 0,
                 'M', '1', '0', '', '#', now(), now(),
-                'ASM 监控权限父目录(隐藏:visible=1);菜单显示走动态 jar module-config.json,此仅 sys_menu perm 管理容器');
+                'ASM 监控权限父目录(隐藏:visible=1);菜单显示走动态 jar module-config.json,此仅 sys_menu perm 管理容器')
+        RETURNING menu_id INTO parent;
     END IF;
 
     -- 13 个 asm-monitor:* 权限（F 按钮），逐一对应 controller @PreAuthorize：
@@ -331,10 +330,9 @@ BEGIN
         'asm-monitor:device:edit'
     ] LOOP
         IF NOT EXISTS (SELECT 1 FROM sys_menu WHERE perms = p) THEN
-            mid := (SELECT coalesce(max(menu_id), 0) + 1 FROM sys_menu);
-            INSERT INTO sys_menu(menu_id, menu_name, parent_id, order_num, path, component, query, is_frame, is_cache,
+            INSERT INTO sys_menu(menu_name, parent_id, order_num, path, component, query, is_frame, is_cache,
                                  menu_type, visible, status, perms, icon, create_time, update_time, remark)
-            VALUES (mid, p, parent, 0, '', NULL, '', 1, 0,
+            VALUES (p, parent, 0, '', NULL, '', 1, 0,
                     'F', '0', '0', p, '#', now(), now(),
                     'ASM 权限(controller @PreAuthorize 逐方法对应)');
         END IF;
