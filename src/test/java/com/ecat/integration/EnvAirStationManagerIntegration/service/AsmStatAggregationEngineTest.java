@@ -92,6 +92,17 @@ class AsmStatAggregationEngineTest {
         return AsmRawRow.of(Instant.parse(time), value == null ? null : new BigDecimal(value));
     }
 
+    /** compute_log 审计时间语义共用断言：started/ended 取真实执行时钟，不复用业务入参 NOW，且落在调用边界内。 */
+    private static void assertAuditExecutionTimestamps(AsmStatComputeLog row, Instant beforeInvocation, Instant afterInvocation) {
+        assertAll(
+                () -> assertFalse(NOW.equals(row.getStartedAt()), "started_at 不得复用业务入参 NOW"),
+                () -> assertFalse(NOW.equals(row.getEndedAt()), "ended_at 不得复用业务入参 NOW"),
+                () -> assertFalse(row.getStartedAt().isBefore(beforeInvocation), "started_at 不得早于物化调用"),
+                () -> assertFalse(row.getStartedAt().isAfter(afterInvocation), "started_at 不得晚于物化调用返回"),
+                () -> assertFalse(row.getEndedAt().isBefore(row.getStartedAt()), "ended_at 不得早于 started_at"),
+                () -> assertFalse(row.getEndedAt().isAfter(afterInvocation), "ended_at 不得晚于物化调用返回"));
+    }
+
     @Test
     @SuppressWarnings("unchecked")
     void minuteFromRaw_aggregatesWindowMeanAndCounts() {
@@ -257,11 +268,14 @@ class AsmStatAggregationEngineTest {
                         .avgValue(7.0).validCount(2L).totalCount(2L).build()));
         when(statMapper.upsertHour(any(List.class))).thenReturn(1);
 
+        Instant beforeInvocation = Instant.now();
         engine.materializeGranularity(AsmStatGranularity.HOUR, WS, WE, "SCHEDULE", NOW);
+        Instant afterInvocation = Instant.now();
 
         ArgumentCaptor<AsmStatComputeLog> cap = ArgumentCaptor.forClass(AsmStatComputeLog.class);
         verify(computeLogMapper).insert(cap.capture());
         AsmStatComputeLog row = cap.getValue();
+        assertAuditExecutionTimestamps(row, beforeInvocation, afterInvocation);
         assertEquals("hour", row.getGranularity(), "dbCode 落库");
         assertEquals("SCHEDULE", row.getTriggerSource());
         assertEquals("BACK", row.getIntervalMode());
@@ -270,6 +284,23 @@ class AsmStatAggregationEngineTest {
         // 审计窗=engine 入口网格对齐后的实际取数窗（WS=10:08 按 hour floor→10:00；对齐后窗才是真实计算窗）
         assertEquals(Instant.parse("2026-08-18T10:00:00Z"), row.getWindowStart());
         assertEquals(Instant.parse("2026-08-18T10:00:00Z"), row.getWindowEnd());
+    }
+
+    /** compute_log 审计时间语义：started/ended 须取真实执行时钟，不得复用业务入参 NOW；ended 不早于 started，且都落在测试调用边界内。 */
+    @Test
+    @SuppressWarnings("unchecked")
+    void computeLog_executionTimestampsUseRealExecutionClockNotBusinessNow() {
+        when(configStatMapper.selectAll()).thenReturn(Collections.singletonList(config(AsmGranularityMask.MINUTE, "FRONT", true)));
+        when(jdbcTemplate.query(anyString(), any(RowMapper.class), any(), any(), any(), any())).thenReturn(Collections.emptyList());
+
+        Instant beforeInvocation = Instant.now();
+        engine.materializeGranularity(AsmStatGranularity.MINUTE, WS, WE, "SCHEDULE", NOW);
+        Instant afterInvocation = Instant.now();
+
+        ArgumentCaptor<AsmStatComputeLog> cap = ArgumentCaptor.forClass(AsmStatComputeLog.class);
+        verify(computeLogMapper).insert(cap.capture());
+        AsmStatComputeLog row = cap.getValue();
+        assertAuditExecutionTimestamps(row, beforeInvocation, afterInvocation);
     }
 
     @Test
@@ -303,13 +334,16 @@ class AsmStatAggregationEngineTest {
         when(jdbcTemplate.query(anyString(), any(RowMapper.class), any(), any(), any(), any()))
                 .thenThrow(new IllegalStateException("db down"));
 
+        Instant beforeInvocation = Instant.now();
         assertThrows(IllegalStateException.class,
                 () -> engine.materializeGranularity(AsmStatGranularity.MINUTE, WS, WE, "SCHEDULE", NOW));
+        Instant afterInvocation = Instant.now();
 
         ArgumentCaptor<AsmStatComputeLog> cap = ArgumentCaptor.forClass(AsmStatComputeLog.class);
         verify(computeLogMapper).insert(cap.capture());
         assertEquals("FAILED", cap.getValue().getStatus());
         assertEquals("db down", cap.getValue().getError());
+        assertAuditExecutionTimestamps(cap.getValue(), beforeInvocation, afterInvocation);
     }
 
     /** per-series 隔离（全灭路径的另一半）：两 series 其一 fetch 抛 RuntimeException——另一 series 照常物化 upsert、compute_log 记 SUCCESS（bucketCount 只计成功者）、整体不上抛。 */

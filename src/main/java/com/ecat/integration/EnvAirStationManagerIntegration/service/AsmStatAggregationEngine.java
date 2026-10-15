@@ -72,8 +72,8 @@ import java.util.Map;
  *
  * <p><b>计算审计</b>：每 (粒度, mode) 物化写一行 asm_stat_compute_log（SUCCESS 记 bucketCount /
  * FAILED 记 error 后上抛）；单 series 失败隔离跳过（其余 series 继续），全 series 失败才整体 FAILED+上抛。
- * 时间源注入（{@code now} 参数）——调度/测试传同一 Instant 确定性落 started/ended，无隐式时钟；
- * 同一 now 也是 fetch 右沿闭合的钳制基准（上界 = min(we+pad, gridFloor(now))，进行中桶不进聚合）。</p>
+ * started/ended 取真实执行时钟（一趟物化开始 / 写审计前），不落业务入参 now；now 仅作 fetch 右沿
+ * 闭合的钳制基准（上界 = min(we+pad, gridFloor(now))，进行中桶不进聚合）。</p>
  *
  * @author coffee
  */
@@ -112,8 +112,8 @@ public class AsmStatAggregationEngine {
      * @param windowStart  原始数据范围左端（UTC；fetch 自动左扩 1 桶；开闭由 mode 定）
      * @param windowEnd    原始数据范围右端（UTC；fetch 自动右扩 1 桶）
      * @param triggerSource 触发源（compute_log.trigger_source：SCHEDULE/RECONFIG/MANUAL）
-     * @param now          时间源（fetch 右沿闭合钳制基准 gridFloor(now) + 审计 started/ended 落此值；
-     *                     调度器传 tick 时刻——进行中桶不进聚合，调用方注入保证确定性）
+     * @param now          fetch 右沿闭合钳制基准 gridFloor(now)；调度器传 tick 时刻——
+     *                     进行中桶不进聚合，调用方注入保证取数确定性
      * @return 各 mode 物化产出桶行数之和
      */
     public int materializeGranularity(AsmStatGranularity granularity, Instant windowStart, Instant windowEnd,
@@ -158,6 +158,7 @@ public class AsmStatAggregationEngine {
     /** 单 (粒度, mode) 一趟：分区 ensure → 逐 series 物化（per-series 隔离）→ SUCCESS/FAILED 审计。 */
     private int materializeForMode(AsmStatGranularity gran, AsmIntervalMode mode, List<AsmConfigStat> series,
                                    Instant ws, Instant we, String trigger, Instant now) {
+        Instant startedAt = Instant.now();
         Duration pad = gran.interval().multipliedBy(FETCH_PAD_BUCKETS);
         partitionManager.ensureStatPartitions(ws.minus(pad), we.plus(pad));
         int bucketCount = 0;
@@ -179,10 +180,10 @@ public class AsmStatAggregationEngine {
             }
         }
         if (failedSeries > 0 && failedSeries == series.size()) {
-            writeAudit(gran, mode, trigger, ws, we, "FAILED", null, now, firstFailure.getMessage());
+            writeAudit(gran, mode, trigger, ws, we, "FAILED", null, startedAt, Instant.now(), firstFailure.getMessage());
             throw firstFailure;
         }
-        writeAudit(gran, mode, trigger, ws, we, "SUCCESS", bucketCount, now, null);
+        writeAudit(gran, mode, trigger, ws, we, "SUCCESS", bucketCount, startedAt, Instant.now(), null);
         log.info("[诊断调试] ASM 物化完成: gran={} mode={} trigger={} series={} buckets={} failedSeries={}",
                 new Object[]{gran.dbCode(), mode, trigger, series.size(), bucketCount, failedSeries});
         return bucketCount;
@@ -520,7 +521,8 @@ public class AsmStatAggregationEngine {
 
     /** 写一行物化审计（SUCCESS/FAILED）；审计写本身失败 catch + error 不掩盖物化结果/异常。 */
     private void writeAudit(AsmStatGranularity gran, AsmIntervalMode mode, String trigger,
-                            Instant ws, Instant we, String status, Integer bucketCount, Instant now, String error) {
+                            Instant ws, Instant we, String status, Integer bucketCount,
+                            Instant startedAt, Instant endedAt, String error) {
         try {
             computeLogMapper.insert(AsmStatComputeLog.builder()
                     .granularity(gran.dbCode())
@@ -529,8 +531,8 @@ public class AsmStatAggregationEngine {
                     .windowEnd(we)
                     .intervalMode(mode.name())
                     .bucketCount(bucketCount)
-                    .startedAt(now)
-                    .endedAt(now)
+                    .startedAt(startedAt)
+                    .endedAt(endedAt)
                     .status(status)
                     .error(error)
                     .build());

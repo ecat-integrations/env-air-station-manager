@@ -69,7 +69,7 @@ public class AsmBackfillController extends BaseController {
                         "windowStart 须 ≤ windowEnd（start=" + windowStart + " end=" + windowEnd + "）");
             }
             List<AsmStatGranularity> grans = parseGranularities(granularities);
-            // 全粒度共用同一 now：与调度路径同 tick 时刻传三级一致，审计基准统一、fetch 右沿闭合口径一致
+            // 全粒度共用同一 now：与调度路径同 tick 时刻传三级一致，业务前沿/fetch闭合基准统一
             Instant now = Instant.now();
             Map<String, Integer> perGranularity = new LinkedHashMap<>();
             int totalRows = 0;

@@ -184,7 +184,7 @@ class AsmStatRefreshSchedulerTest {
 
         verify(engine).materializeGranularity(eq(AsmStatGranularity.FIVE_MIN), startCap.capture(), endCap.capture(),
                 eq("SCHEDULE"), nowCap.capture());
-        assertEquals(endCap.getValue(), nowCap.getValue(), "审计时间源 now 与窗口右端 we 是同一 Instant");
+        assertEquals(endCap.getValue(), nowCap.getValue(), "业务前沿 now 与窗口右端 we 是同一 Instant");
         assertEquals(endCap.getValue().minus(Duration.ofMinutes(15)), startCap.getValue(), "ws = we - window");
     }
 
