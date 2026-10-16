@@ -4,13 +4,26 @@ import com.ecat.core.State.AttrState;
 import com.ecat.core.State.AttributeBase;
 import com.ecat.core.State.AttributeClass;
 import com.ecat.core.State.AttributeStatus;
+import com.ecat.core.State.I18nTextAttribute;
 import com.ecat.core.State.UnitInfo;
+import com.ecat.integration.logicdevice.LogicState.LAQAttribute;
+import com.ecat.integration.logicdevice.LogicState.LBinaryAttribute;
+import com.ecat.integration.logicdevice.LogicState.LNumericAttribute;
+import com.ecat.integration.logicdevice.LogicState.LStringSelectAttribute;
+import com.ecat.integration.logicdevice.LogicState.LTextAttribute;
+import com.ecat.integration.logicdevice.LogicState.LTimeAttribute;
 import com.ecat.integration.EnvAirStationManagerIntegration.support.AsmOnlineJudge;
 import com.ecat.integration.EnvAirStationManagerIntegration.controller.dto.AsmSnapshotAttrDto;
 import com.ecat.integration.EnvAirStationManagerIntegration.controller.dto.AsmSnapshotDeviceDto;
 import com.ecat.integration.EnvAirStationManagerIntegration.controller.dto.AsmAlarmActiveDto;
+import com.ecat.integration.EnvAirStationManagerIntegration.api.SdkAttributeStatus;
+import com.ecat.integration.EnvAirStationManagerIntegration.api.SdkCustomSnapshotAttr;
+import com.ecat.integration.EnvAirStationManagerIntegration.api.SdkCustomSnapshotProjection;
+import com.ecat.integration.EnvAirStationManagerIntegration.api.SdkCustomSnapshotRequest;
+import com.ecat.integration.EnvAirStationManagerIntegration.api.SdkUnit;
 import com.ecat.integration.EnvAirStationManagerIntegration.rule.AsmAlarmRegistry;
 import com.ecat.integration.EnvAirStationManagerIntegration.support.AsmUnitPurpose;
+import com.ecat.core.State.Unit.UnitInfoFactory;
 import com.ecat.integration.logicdevice.LogicDevice.LogicDevice;
 import com.ecat.integration.logicdevice.LogicDeviceManager;
 import com.ecat.integration.logicdevice.LogicState.LogicAttributeDefine;
@@ -19,13 +32,17 @@ import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashSet;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.text.Collator;
 import java.util.Locale;
 import java.util.Comparator;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 
 /**
  * P2 snapshot service——站房逻辑设备当前态构建（snapshot REST 与 {@code AirStationSdk.querySnapshot} 共用）。
@@ -197,6 +214,265 @@ public class AsmSnapshotService {
             }
         }
         return Collections.emptyList();
+    }
+
+    /**
+     * caller-defined snapshot：绕开 ASM STANDARD/MONITOR 偏好，按请求逐 attr 投影 LD state。
+     *
+     * <p>数值源固定为 {@code state.value + state.nativeUnit}；空串目标=明确直通，dimensionless 数值
+     * 返回 {@code unit=null}。非数值源为 {@code state.displayValue}。
+     * 行序与 {@code request.projections} 完全一致；调用方契约错误同步抛、整个请求不产出部分结果。
+     * registry 无该站房设备返空列表（设备存在性是运行时状态，与既有 snapshot 语义一致）。</p>
+     *
+     * @param request 请求（uid + 逐 attr 目标单位/精度）
+     * @return caller-defined 快照行
+     * @throws IllegalArgumentException 请求形状、attr 类型、单位或精度等调用方契约非法
+     * @throws IllegalStateException    LD state/nativeUnit/ratio/displayValue 等内部契约缺失或不可达
+     */
+    public List<SdkCustomSnapshotAttr> queryCustomSnapshot(SdkCustomSnapshotRequest request) {
+        validateCustomRequest(request);
+        LogicDevice device = findStationDevice(request.getUid());
+        if (device == null) {
+            return Collections.emptyList();
+        }
+
+        Map<String, LogicAttributeDefine> defs = defIndex(device);
+        List<SdkCustomSnapshotAttr> out = new ArrayList<>(request.getProjections().size());
+        for (SdkCustomSnapshotProjection projection : request.getProjections()) {
+            String attrId = projection.getAttrId();
+            LogicAttributeDefine def = defs.get(attrId);
+            if (def == null) {
+                throw new IllegalArgumentException("未知属性: uid=" + request.getUid()
+                        + " attrId=" + attrId);
+            }
+            AttributeBase<?> attr = device.getAttrs().get(attrId);
+            if (attr == null) {
+                throw new IllegalStateException("属性定义存在但 attr 实例缺失: uid="
+                        + request.getUid() + " attrId=" + attrId);
+            }
+
+            // 一次读出不可变 state；后续 value/nativeUnit/displayValue/status/time 都读同一快照，禁撕裂。
+            AttrState<?> state = attr.getState();
+            if (isNumericProjectionDef(def)) {
+                out.add(numericCustomRow(request.getUid(), projection, def, state));
+            }
+            else if (isDisplayProjectionDef(def)) {
+                out.add(displayCustomRow(request.getUid(), projection, state));
+            }
+            else {
+                throw new IllegalArgumentException("不支持的 attr 类型（仅支持数值与展示型非数值）: uid="
+                        + request.getUid() + " attrId=" + attrId + " attrClassType="
+                        + def.getAttrClassType().getName());
+            }
+        }
+        return out;
+    }
+
+    /** 请求级严格校验：request/uid/projections 形状与 attrId 唯一性。 */
+    private static void validateCustomRequest(SdkCustomSnapshotRequest request) {
+        if (request == null) {
+            throw new IllegalArgumentException("request 不能为空");
+        }
+        String uid = request.getUid();
+        if (uid == null || uid.trim().isEmpty() || !uid.startsWith(STATION_UID_PREFIX)) {
+            throw new IllegalArgumentException("uid 须为 " + STATION_UID_PREFIX
+                    + "* 前缀的站房逻辑设备 uniqueId: " + uid);
+        }
+        List<SdkCustomSnapshotProjection> projections = request.getProjections();
+        if (projections == null || projections.isEmpty()) {
+            throw new IllegalArgumentException("projections 不能为空（至少声明一个 attr 投影）");
+        }
+        Set<String> seen = new LinkedHashSet<>();
+        for (SdkCustomSnapshotProjection projection : projections) {
+            if (projection == null) {
+                throw new IllegalArgumentException("projection 不能为 null");
+            }
+            String attrId = projection.getAttrId();
+            if (attrId == null || attrId.trim().isEmpty()) {
+                throw new IllegalArgumentException("attrId 不能为空白");
+            }
+            if (!seen.add(attrId)) {
+                throw new IllegalArgumentException("attrId 不可重复: " + attrId);
+            }
+        }
+    }
+
+    /** 数值投影行：严格解码目标单位、显式换算、一次请求精度修约，绝不回读 LD displayValue。 */
+    private static SdkCustomSnapshotAttr numericCustomRow(String uid,
+            SdkCustomSnapshotProjection projection,
+            LogicAttributeDefine def,
+            AttrState<?> state) {
+        validateNumericProjectionShape(projection);
+        boolean defRow = state == null || state.getValue() == null;
+        UnitInfo source = defRow ? def.getNativeUnit() : state.getNativeUnit();
+        boolean convert = !projection.getTargetUnitFullName().isEmpty();
+        UnitInfo target = convert
+                ? decodeCustomTarget(uid, projection.getAttrId(), projection.getTargetUnitFullName(), source)
+                : source;
+        Double ratio = convert ? source.convertUnit(target) : Double.valueOf(1.0D);
+        if (ratio == null) {
+            throw new IllegalStateException("单位换算比率缺失: uid=" + uid + " attrId="
+                    + projection.getAttrId() + " source=" + source.getFullUnitString()
+                    + " target=" + target.getFullUnitString());
+        }
+
+        if (defRow) {
+            return customDefRow(projection, target == null ? null : sdkUnit(target));
+        }
+        Object raw = state.getValue();
+        if (!(raw instanceof Number)) {
+            throw new IllegalStateException("数值属性 state.value 须为 Number: uid=" + uid
+                    + " attrId=" + projection.getAttrId() + " actual=" + raw.getClass().getName());
+        }
+        double rawDouble = ((Number) raw).doubleValue();
+        if (!Double.isFinite(rawDouble)) {
+            throw new IllegalStateException("数值属性 state.value 非法（NaN/Infinite）: uid=" + uid
+                    + " attrId=" + projection.getAttrId() + " value=" + rawDouble);
+        }
+
+        int precision = projection.getDisplayPrecision();
+        BigDecimal projected = BigDecimal.valueOf(rawDouble)
+                .multiply(BigDecimal.valueOf(ratio.doubleValue()))
+                .setScale(precision, RoundingMode.HALF_EVEN);
+        return customRowBuilder(projection, state)
+                .value(projected.doubleValue())
+                .valueText(projected.toPlainString())
+                .unit(target == null ? null : sdkUnit(target))
+                .displayPrecision(precision)
+                .build();
+    }
+
+    /** 展示型非数值投影行：只透传 LD state.displayValue；缺失时显式失败，不做 String.valueOf 兜底。 */
+    private static SdkCustomSnapshotAttr displayCustomRow(String uid,
+            SdkCustomSnapshotProjection projection,
+            AttrState<?> state) {
+        if (projection.getTargetUnitFullName() == null) {
+            throw new IllegalArgumentException("targetUnitFullName 不能为 null（非数值属性空串=明确不换算）: uid="
+                    + uid + " attrId=" + projection.getAttrId());
+        }
+        if (!projection.getTargetUnitFullName().isEmpty()) {
+            throw new IllegalArgumentException("非数值属性 targetUnitFullName 只允许空串: uid=" + uid
+                    + " attrId=" + projection.getAttrId() + " actual=" + projection.getTargetUnitFullName());
+        }
+        if (projection.getDisplayPrecision() != null) {
+            throw new IllegalArgumentException("非数值属性 displayPrecision 必须为 null: uid=" + uid
+                    + " attrId=" + projection.getAttrId());
+        }
+        if (state == null || state.getValue() == null) {
+            return customDefRow(projection, null);
+        }
+        if (state.getDisplayValue() == null) {
+            throw new IllegalStateException("非数值 LIVE state.displayValue 缺席: uid=" + uid
+                    + " attrId=" + projection.getAttrId());
+        }
+        return customRowBuilder(projection, state)
+                .valueText(state.getDisplayValue())
+                .build();
+    }
+
+    /** 数值投影形状校验：目标单位不能漏传，精度必须显式且 0..6。 */
+    private static void validateNumericProjectionShape(SdkCustomSnapshotProjection projection) {
+        if (projection.getTargetUnitFullName() == null) {
+            throw new IllegalArgumentException("targetUnitFullName 不能为 null（空串=明确不换算；"
+                    + "非空=单位 full string）: attrId=" + projection.getAttrId());
+        }
+        Integer precision = projection.getDisplayPrecision();
+        if (precision == null || precision < 0 || precision > 6) {
+            throw new IllegalArgumentException("数值属性 displayPrecision 须在 0..6: attrId="
+                    + projection.getAttrId() + " actual=" + precision);
+        }
+    }
+
+    /** 解码单位 full string；同 UnitInfo 类与比率可达性由调用链显式校验，不做源单位降级。 */
+    private static UnitInfo decodeCustomTarget(String uid, String attrId,
+            String targetUnitFullName, UnitInfo source) {
+        if (targetUnitFullName.trim().isEmpty()) {
+            throw new IllegalArgumentException("targetUnitFullName 非空契约不接受空白串: attrId=" + attrId);
+        }
+        if (source == null) {
+            throw new IllegalStateException("数值属性 nativeUnit 缺席，无法换算: uid=" + uid
+                    + " attrId=" + attrId + " target=" + targetUnitFullName);
+        }
+        UnitInfo target;
+        try {
+            target = UnitInfoFactory.getEnum(targetUnitFullName);
+        }
+        catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("targetUnitFullName 非法：须为单位 full string"
+                    + "「枚举类名.枚举常量名」（如 PressureUnit.MPA），禁止展示符号: attrId=" + attrId
+                    + " actual=" + targetUnitFullName, e);
+        }
+        if (!source.getClass().equals(target.getClass())) {
+            throw new IllegalArgumentException("单位类不可换算（不降级源单位）: uid=" + uid
+                    + " attrId=" + attrId + " source=" + source.getFullUnitString()
+                    + " target=" + target.getFullUnitString());
+        }
+        return target;
+    }
+
+    /** caller-defined DEF 行：无观测态，但数值请求的单位/精度元数据经校验后保留。 */
+    private static SdkCustomSnapshotAttr customDefRow(SdkCustomSnapshotProjection projection,
+            SdkUnit unit) {
+        return SdkCustomSnapshotAttr.builder()
+                .attrId(projection.getAttrId())
+                .unit(unit)
+                .displayPrecision(projection.getDisplayPrecision())
+                .source(SOURCE_DEF)
+                .build();
+    }
+
+    /** LIVE 行公共投影：attr id、主状态与 lastUpdated 都来自同一次 state 快照。 */
+    private static SdkCustomSnapshotAttr.SdkCustomSnapshotAttrBuilder customRowBuilder(
+            SdkCustomSnapshotProjection projection, AttrState<?> state) {
+        AttributeStatus status = state.getStatus();
+        return SdkCustomSnapshotAttr.builder()
+                .attrId(projection.getAttrId())
+                .status(status == null ? null : SdkAttributeStatus.builder()
+                        .key(status.name())
+                        .displayName(status.getDescription())
+                        .build())
+                .updateTime(state.getLastUpdated())
+                .source(SOURCE_LIVE);
+    }
+
+    /** core UnitInfo → ASM api 窄投影。 */
+    private static SdkUnit sdkUnit(UnitInfo unit) {
+        return SdkUnit.builder()
+                .fullName(unit.getFullUnitString())
+                .symbol(unit.getName())
+                .displayName(unit.getDisplayName())
+                .build();
+    }
+
+    /** caller-defined 数值 def：封装数值逻辑属性类与裸 Number 值类型。 */
+    private static boolean isNumericProjectionDef(LogicAttributeDefine def) {
+        Class<?> type = def.getAttrClassType();
+        return type != null && (Number.class.isAssignableFrom(type)
+                || LNumericAttribute.class.isAssignableFrom(type)
+                || LAQAttribute.class.isAssignableFrom(type));
+    }
+
+    /** caller-defined 支持的展示型非数值 def 白名单：Text/Time/Binary/Select/I18nText。 */
+    private static boolean isDisplayProjectionDef(LogicAttributeDefine def) {
+        Class<?> type = def.getAttrClassType();
+        return type != null && (String.class == type
+                || Boolean.class == type
+                || Instant.class == type
+                || LTextAttribute.class.isAssignableFrom(type)
+                || LTimeAttribute.class.isAssignableFrom(type)
+                || LBinaryAttribute.class.isAssignableFrom(type)
+                || LStringSelectAttribute.class.isAssignableFrom(type)
+                || I18nTextAttribute.class.isAssignableFrom(type));
+    }
+
+    /** registry 当前 active 逻辑设备中定位站房设备；不存在返 null（调用方按既有语义返空列表）。 */
+    private static LogicDevice findStationDevice(String uid) {
+        for (LogicDevice device : LogicDeviceManager.getInstance().getRegisteredDevices()) {
+            if (uid.equals(device.getUniqueId()) && uid.startsWith(STATION_UID_PREFIX)) {
+                return device;
+            }
+        }
+        return null;
     }
 
     /**

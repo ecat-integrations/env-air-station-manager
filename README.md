@@ -86,7 +86,11 @@ AirStationSdk sdk = ((EnvAirStationManagerIntegration) core.getIntegrationRegist
 //     窗口左开右闭 (start,end] episode 区间重叠（end 时刻触发算本期、恰在 start 闭单归上期，
 //     连续分窗无缝无重），持续中 ACTIVE 行天然可查；行形状=前端报警表格列+alarmType 回显，
 //     deviceLabel/attrLabel 解析不到=null（回退归消费方）、durationMs 持续中=null
-// listStatParams() / listAlarmTypes()（报警标识目录）/ querySnapshot(uid)
+// listStatParams() / listAlarmTypes()（报警标识目录）
+// querySnapshot(uid) —— ASM 展示导向：STANDARD 单位链 + ASM MONITOR 精度链，无值=DEF 占位
+// queryCustomSnapshot(request) —— caller-defined 投影：LD AttrState.value/nativeUnit 为数值源，
+//     逐 attr 传 targetUnitFullName + displayPrecision（HALF_EVEN）；不读 ASM 偏好/精度；
+//     空串=明确不换算（dimensionless 数值 unit=null），非数值走 LD displayValue
 // control(SdkControlRequest) —— 请求对象：origin 由调用方声明（LOCAL=本站/集成自身发起，
 //     caller=发起方集成坐标；REMOTE=第三方代传远程侧指令，caller=最终用户标识）；
 //     unit null 非法/空串=按属性默认单位/非空=full string「枚举类名.枚举常量名」（禁 °C 符号）；
@@ -97,7 +101,7 @@ AirStationSdk sdk = ((EnvAirStationManagerIntegration) core.getIntegrationRegist
 
 ## 测试与回归
 
-- **模块单测**：`mvnd clean test`（398 个，覆盖引擎（数值 avg + 非数值 ALARM/STATE）/规则/生命周期/在线判定/排序/SDK 全域/控制请求校验与单位换算）
+- **模块单测**：`mvnd clean test`（448 个，覆盖引擎（数值 avg + 非数值 ALARM/STATE）/规则/生命周期/在线判定/排序/SDK 全域/控制请求校验与单位换算）
 - **浏览器回归（强制，API 冒烟不替代）**：Playwright 套件已移至 workspace `.claude/skills/ruoyi-e2e-test/skills/env-air-station-manager/e2e/`（2026-09-09 迁出本仓，入口与陷阱表见该目录 README 与 asm-e2e-test.md）——`npm run test:asm-e2e`（ro 只读组并行 / real 写操作组串行；g1-g13 分组脚本）。前置：core+8081 起且 vue 注入（globalSetup 自检）。
 - **DB 侧回归**：workspace ruoyi-e2e-test skill 的 `asm-regression.py`（bucket-check / idempotency / compute-log / alarm-check[episode 心跳断言] / control-check / linkage-check）。
 

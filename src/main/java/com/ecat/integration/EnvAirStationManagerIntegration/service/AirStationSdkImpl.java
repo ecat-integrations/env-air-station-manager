@@ -9,6 +9,8 @@ import com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmAlarmRecor
 import com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmAlarmRule;
 import com.ecat.integration.EnvAirStationManagerIntegration.mapper.AsmAlarmRecordMapper;
 import com.ecat.integration.EnvAirStationManagerIntegration.api.AsmParamKey;
+import com.ecat.integration.EnvAirStationManagerIntegration.api.SdkCustomSnapshotAttr;
+import com.ecat.integration.EnvAirStationManagerIntegration.api.SdkCustomSnapshotRequest;
 import com.ecat.integration.EnvAirStationManagerIntegration.api.SdkParamMeta;
 import com.ecat.integration.EnvAirStationManagerIntegration.api.SdkSnapshotAttr;
 import com.ecat.integration.EnvAirStationManagerIntegration.api.SdkStatRow;
@@ -154,6 +156,11 @@ public class AirStationSdkImpl implements AirStationSdk {
                     .build());
         }
         return out;
+    }
+
+    @Override
+    public List<SdkCustomSnapshotAttr> queryCustomSnapshot(SdkCustomSnapshotRequest request) {
+        return snapshotService.queryCustomSnapshot(request);
     }
 
     @Override

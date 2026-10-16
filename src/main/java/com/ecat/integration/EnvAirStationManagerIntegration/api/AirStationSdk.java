@@ -83,6 +83,24 @@ public interface AirStationSdk {
     List<SdkSnapshotAttr> querySnapshot(String uid);
 
     /**
+     * 按调用方声明投影单台站房设备实时快照（LD 原值 → 单位换算 → HALF_EVEN 修约）。
+     *
+     * <p>{@link #querySnapshot(String)} 是 ASM 展示出口：STANDARD 单位链 + ASM MONITOR 精度链。
+     * 本方法不读取 {@code asm_config_unit} 的 STANDARD/MONITOR 偏好、ASM 监控精度或 LD displayValue；
+     * 数值属性源固定为 {@code AttrState.value + nativeUnit}。目标单位和精度逐 attr 显式声明，
+     * 任一契约错误同步抛 {@link IllegalArgumentException}，不返回部分结果。</p>
+     *
+     * <p>展示型非数值属性（Text/Time/Binary/Select/I18nText）请求空串目标单位且 precision=null，
+     * 返回 LD {@code AttrState.displayValue}；DEF（已定义但无值）行保留目标单位和精度元数据。</p>
+     *
+     * @param request 投影请求（uid + projections，约束见 {@link SdkCustomSnapshotRequest}）
+     * @return 行序与请求 projections 一致；registry 无该设备返空列表
+     * @throws IllegalArgumentException request/uid/projections/attr/type/unit/precision 任一调用方契约非法
+     * @throws IllegalStateException     LD state/nativeUnit/ratio/displayValue 等内部契约缺失或不可达
+     */
+    List<SdkCustomSnapshotAttr> queryCustomSnapshot(SdkCustomSnapshotRequest request);
+
+    /**
      * 查询指定报警标识在时间段内的报警条目（含持续中尚未恢复的）。
      *
      * <p><b>窗口语义 = episode 区间重叠，查询窗左开右闭 {@code (start, end]}</b>：报警 episode 与开区间
