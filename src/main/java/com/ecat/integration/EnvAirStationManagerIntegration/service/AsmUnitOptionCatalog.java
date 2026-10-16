@@ -44,6 +44,8 @@ public final class AsmUnitOptionCatalog {
         CLASS_LABELS.put(com.ecat.core.State.Unit.SpeedUnit.class, "速度");
         CLASS_LABELS.put(com.ecat.core.State.Unit.FrequencyUnit.class, "频率");
         CLASS_LABELS.put(com.ecat.core.State.Unit.PowerUnit.class, "功率");
+        CLASS_LABELS.put(com.ecat.core.State.Unit.ApparentPowerUnit.class, "视在功率");
+        CLASS_LABELS.put(com.ecat.core.State.Unit.ReactivePowerUnit.class, "无功功率");
     }
 
     /** per-类候选缓存（静态不可变目录，进程生命周期有效）。 */
