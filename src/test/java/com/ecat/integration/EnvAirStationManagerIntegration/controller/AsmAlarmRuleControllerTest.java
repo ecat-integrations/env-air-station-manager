@@ -6,6 +6,8 @@ import com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmAlarmRule;
 import com.ecat.integration.EnvAirStationManagerIntegration.mapper.AsmAlarmRuleMapper;
 import com.ecat.integration.EnvAirStationManagerIntegration.rule.AsmAlarmRuleIndex;
 import com.ecat.integration.EnvAirStationManagerIntegration.service.AsmDeviceLabelService;
+import com.ecat.core.State.AttributeClass;
+import com.ecat.integration.EnvAirStationManagerIntegration.service.AsmLogicAttributeDefs;
 import com.ecat.integration.logicdevice.LogicDevice.LogicDevice;
 import com.ecat.integration.logicdevice.LogicState.LogicAttributeDefine;
 import com.ruoyi.common.exception.ServiceException;
@@ -218,8 +220,8 @@ class AsmAlarmRuleControllerTest {
         when(ruleMapper.selectAll()).thenReturn(Collections.singletonList(rule));
 
         LogicDevice th = mock(LogicDevice.class, withSettings().lenient());
-        LogicAttributeDefine tempDef = new LogicAttributeDefine();
-        tempDef.setAttrId("temperature");
+        LogicAttributeDefine tempDef = AsmLogicAttributeDefs.numericDef(
+                "temperature", AttributeClass.NUMERIC, null, null, 2);
         tempDef.setDisplayName("温度");
         when(th.getAttrDefs()).thenReturn(Collections.singletonList(tempDef));
         Map<String, LogicDevice> registry = new HashMap<>();

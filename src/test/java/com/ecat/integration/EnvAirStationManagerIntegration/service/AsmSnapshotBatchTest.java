@@ -14,7 +14,6 @@ import com.ecat.integration.EnvAirStationManagerIntegration.controller.dto.AsmSn
 import com.ecat.integration.EnvAirStationManagerIntegration.rule.AsmAlarmRegistry;
 import com.ecat.integration.logicdevice.LogicDevice.LogicDevice;
 import com.ecat.integration.logicdevice.LogicDeviceManager;
-import com.ecat.integration.logicdevice.LogicState.ILogicAttribute;
 import com.ecat.integration.logicdevice.LogicState.LogicAttributeDefine;
 import com.ecat.core.ConfigEntry.ConfigEntry;
 import org.junit.jupiter.api.AfterEach;
@@ -96,15 +95,14 @@ class AsmSnapshotBatchTest {
         LogicDevice device = new LogicDevice(entry) {
             @Override public List<LogicAttributeDefine> getAttrDefs() {
                 return Arrays.asList(
-                        new LogicAttributeDefine("online", AttributeClass.TEXT, null, null, 0, false, String.class),
+                        AsmLogicAttributeDefs.textDef("online", AttributeClass.TEXT),
                         // def 占位：定义了但从未有值 → 快照按无数据处理出 DEF 占位行
-                        new LogicAttributeDefine("ai_running", AttributeClass.TEXT, null, null, 0, false, String.class));
+                        AsmLogicAttributeDefs.textDef("ai_running", AttributeClass.TEXT));
             }
             @Override protected String getMappingType() { return "TEST-ASM"; }
             @Override public void start() {}
             @Override public void stop() {}
             @Override public void release() {}
-            @Override public Map<String, ILogicAttribute<?>> getAttrMap() { return new HashMap<>(); }
         };
         device.load(EcatCore.getInstance());
         device.init();

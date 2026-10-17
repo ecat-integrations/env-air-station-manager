@@ -15,7 +15,7 @@ import com.ecat.integration.EnvAirStationManagerIntegration.controller.dto.AsmSn
 import com.ecat.integration.EnvAirStationManagerIntegration.rule.AsmAlarmRegistry;
 import com.ecat.integration.logicdevice.LogicDevice.LogicDevice;
 import com.ecat.integration.logicdevice.LogicDeviceManager;
-import com.ecat.integration.logicdevice.LogicState.ILogicAttribute;
+import com.ecat.integration.logicdevice.Meta.AttrIdStation.StatusOptions;
 import com.ecat.integration.logicdevice.LogicState.LogicAttributeDefine;
 import com.ecat.core.ConfigEntry.ConfigEntry;
 import org.junit.jupiter.api.AfterEach;
@@ -85,14 +85,14 @@ class AsmSnapshotAlarmTest {
         entry.setData(data);
         LogicDevice device = new LogicDevice(entry) {
             @Override public List<LogicAttributeDefine> getAttrDefs() {
-                return Collections.singletonList(new LogicAttributeDefine(
-                        "temp_alarm", AttributeClass.ALARM_STATUS, null, null, 0, false, String.class));
+                return Collections.singletonList(AsmLogicAttributeDefs.selectDef(
+                        "temp_alarm", AttributeClass.ALARM_STATUS, false,
+                        StatusOptions.AlarmStatusOptions.OPTIONS));
             }
             @Override protected String getMappingType() { return "TEST-ASM"; }
             @Override public void start() {}
             @Override public void stop() {}
             @Override public void release() {}
-            @Override public Map<String, ILogicAttribute<?>> getAttrMap() { return new HashMap<>(); }
         };
         device.load(EcatCore.getInstance());
         device.init();

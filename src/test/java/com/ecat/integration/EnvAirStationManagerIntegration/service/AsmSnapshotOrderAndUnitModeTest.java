@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
@@ -61,10 +62,17 @@ class AsmSnapshotOrderAndUnitModeTest {
     @Test
     void sortAttrRows_groupsStatusThenCommandThenNumeric_pinyinWithinGroup() {
         Map<String, LogicAttributeDefine> defs = new HashMap<>();
-        defs.put("used_spots", new LogicAttributeDefine("used_spots", AttributeClass.NUMERIC, null, null, 0, false, Double.class));
-        defs.put("alarm_status", new LogicAttributeDefine("alarm_status", AttributeClass.ALARM_STATUS, null, null, 0, false, String.class));
-        defs.put("cal_command", new LogicAttributeDefine("cal_command", AttributeClass.TEXT, null, null, 0, false, String.class));
-        defs.put("reset_command", new LogicAttributeDefine("reset_command", AttributeClass.TEXT, null, null, 0, false, String.class));
+        defs.put("used_spots", AsmLogicAttributeDefs.numericDef(
+                "used_spots", AttributeClass.NUMERIC, null, null, 0));
+        defs.put("alarm_status", AsmLogicAttributeDefs.selectDef(
+                "alarm_status", AttributeClass.ALARM_STATUS, false,
+                com.ecat.integration.logicdevice.Meta.AttrIdStation.StatusOptions.AlarmStatusOptions.OPTIONS));
+        defs.put("cal_command", AsmLogicAttributeDefs.commandDef(
+                "cal_command", AttributeClass.COMMAND, false,
+                Collections.singletonList("start")));
+        defs.put("reset_command", AsmLogicAttributeDefs.commandDef(
+                "reset_command", AttributeClass.COMMAND, false,
+                Collections.singletonList("reset")));
         List<AsmSnapshotAttrDto> rows = Arrays.asList(
                 row("used_spots", "剩余斑点数"),
                 row("reset_command", "重置记录"),
@@ -80,9 +88,10 @@ class AsmSnapshotOrderAndUnitModeTest {
     @Test
     void sortAttrRows_defPlaceholderFollowsDefGroup_notDumpedAtTail() {
         Map<String, LogicAttributeDefine> defs = new HashMap<>();
-        defs.put("ai_running", new LogicAttributeDefine("ai_running", AttributeClass.TEXT, null, null, 0, false, String.class));
+        defs.put("ai_running", AsmLogicAttributeDefs.textDef("ai_running", AttributeClass.TEXT));
         // 数值 def 占位行（无值）：经 def 归数值组，不落状态组也不单独垫底
-        defs.put("used_spots", new LogicAttributeDefine("used_spots", AttributeClass.NUMERIC, null, null, 0, false, Double.class));
+        defs.put("used_spots", AsmLogicAttributeDefs.numericDef(
+                "used_spots", AttributeClass.NUMERIC, null, null, 0));
         List<AsmSnapshotAttrDto> rows = Arrays.asList(
                 row("used_spots", "剩余斑点数"),
                 row("ai_running", "AI运行状态"));

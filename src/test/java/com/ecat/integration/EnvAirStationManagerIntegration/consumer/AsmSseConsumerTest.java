@@ -9,11 +9,11 @@ import com.ecat.core.State.AttributeStatus;
 import com.ecat.core.State.AttrState;
 import com.ecat.core.State.Unit.TemperatureUnit;
 import com.ecat.integration.EnvAirStationManagerIntegration.service.AsmDisplayValue;
+import com.ecat.integration.EnvAirStationManagerIntegration.service.AsmLogicAttributeDefs;
 import com.ecat.integration.EnvAirStationManagerIntegration.service.AsmUnitContract;
 import com.ecat.integration.EnvAirStationManagerIntegration.sse.AsmSseBroadcaster;
 import com.ecat.integration.EnvAirStationManagerIntegration.support.AsmUnitPurpose;
 import com.ecat.integration.logicdevice.LogicDevice.LogicDevice;
-import com.ecat.integration.logicdevice.LogicState.LogicAttributeDefine;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
@@ -89,8 +89,8 @@ class AsmSseConsumerTest {
         Map<String, com.ecat.core.State.AttributeBase<?>> attrs = new HashMap<>();
         when(stationDevice.getAttrs()).thenReturn(attrs);
         when(stationDevice.getAttrDefs()).thenReturn(Collections.singletonList(
-                new LogicAttributeDefine("temperature", AttributeClass.TEMPERATURE,
-                        TemperatureUnit.CELSIUS, TemperatureUnit.CELSIUS, 1, false, Double.class)));
+                AsmLogicAttributeDefs.numericDef("temperature", AttributeClass.TEMPERATURE,
+                        TemperatureUnit.CELSIUS, TemperatureUnit.CELSIUS, 1)));
         // MONITOR（custom 出口）换算：偏好 mV 类比下用 25.5 + celsius key；STANDARD（standard 出口）恒原生直通
         when(unitContract.resolveDisplay(eq(AsmUnitPurpose.MONITOR), eq(STATION_UID), eq("temperature"),
                 anyDouble(), anyString()))
@@ -140,8 +140,8 @@ class AsmSseConsumerTest {
         when(stationDevice.getUniqueId()).thenReturn(STATION_UID);
         when(stationDevice.getAttrs()).thenReturn(new HashMap<>());
         when(stationDevice.getAttrDefs()).thenReturn(Collections.singletonList(
-                new LogicAttributeDefine("dust", AttributeClass.PM10,
-                        TemperatureUnit.CELSIUS, TemperatureUnit.CELSIUS, 2, false, Double.class)));
+                AsmLogicAttributeDefs.numericDef("dust", AttributeClass.PM10,
+                        TemperatureUnit.CELSIUS, TemperatureUnit.CELSIUS, 2)));
         // 出口换算后全精度 160.67183333333332 → def displayPrecision 2、HALF_EVEN → 160.67
         when(unitContract.resolveDisplay(eq(AsmUnitPurpose.MONITOR), eq(STATION_UID), eq("dust"),
                 anyDouble(), anyString()))

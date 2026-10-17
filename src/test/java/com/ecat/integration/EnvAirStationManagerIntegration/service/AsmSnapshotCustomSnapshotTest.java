@@ -21,12 +21,12 @@ import com.ecat.integration.EnvAirStationManagerIntegration.api.SdkCustomSnapsho
 import com.ecat.integration.logicdevice.Meta.AttrIdStation.AccessControl;
 import com.ecat.integration.logicdevice.Meta.AttrIdStation.FilterChanger;
 import com.ecat.integration.logicdevice.Meta.AttrIdStation.StandardGas;
+import com.ecat.integration.logicdevice.Meta.AttrIdStation.StatusOptions;
 import com.ecat.integration.logicdevice.Meta.DeviceId;
 import com.ecat.integration.EnvAirStationManagerIntegration.rule.AsmAlarmRegistry;
 import com.ecat.integration.EnvAirStationManagerIntegration.support.AsmUnitPurpose;
 import com.ecat.integration.logicdevice.LogicDevice.LogicDevice;
 import com.ecat.integration.logicdevice.LogicDeviceManager;
-import com.ecat.integration.logicdevice.LogicState.ILogicAttribute;
 import com.ecat.integration.logicdevice.LogicState.LogicAttributeDefine;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -223,10 +223,21 @@ class AsmSnapshotCustomSnapshotTest {
     }
 
     @Test
-    void missingAttrInstanceIsInternalFailureEvenWhenDefExists() {
+    void defExistingAttrSlotWithoutValueReturnsDefRow() {
         registerDevice();
-        assertThrows(IllegalStateException.class, () -> service.queryCustomSnapshot(request(
-                projection(PRESSURE_ATTR, PressureUnit.MPA.getFullUnitString(), 3))));
+        List<SdkCustomSnapshotAttr> rows = service.queryCustomSnapshot(request(
+                projection(PRESSURE_ATTR, PressureUnit.MPA.getFullUnitString(), 3)));
+
+        assertEquals(1, rows.size());
+        SdkCustomSnapshotAttr row = rows.get(0);
+        assertEquals(PRESSURE_ATTR, row.getAttrId());
+        assertEquals("DEF", row.getSource());
+        assertNull(row.getValue());
+        assertNull(row.getValueText());
+        assertNull(row.getStatus());
+        assertNull(row.getUpdateTime());
+        assertEquals(PressureUnit.MPA.getFullUnitString(), row.getUnit().getFullName());
+        assertEquals(3, row.getDisplayPrecision());
     }
 
     @Test
@@ -371,17 +382,23 @@ class AsmSnapshotCustomSnapshotTest {
         LogicDevice device = new LogicDevice(entry) {
             @Override public List<LogicAttributeDefine> getAttrDefs() {
                 List<LogicAttributeDefine> defs = new ArrayList<>();
-                defs.add(numericDef(PRESSURE_ATTR, AttributeClass.PRESSURE));
-                defs.add(textDef(TEXT_ATTR, AttributeClass.TEXT));
-                defs.add(textDef(SELECT_ATTR, AttributeClass.STATUS));
-                defs.add(projectionDef(BINARY_ATTR, AttributeClass.STATUS, Boolean.class));
-                defs.add(projectionDef(TIME_ATTR, AttributeClass.TIME, Instant.class));
-                defs.add(dimensionlessDef(TEST_DIMENSIONLESS_ATTR));
-                defs.add(projectionDef(I18N_ATTR, AttributeClass.TEXT,
-                        com.ecat.core.State.I18nTextAttribute.class));
-                defs.add(projectionDef(TEST_TIE_ATTR, AttributeClass.PRESSURE, Double.class));
-                defs.add(new LogicAttributeDefine(COMMAND_ATTR, AttributeClass.COMMAND, null, null,
-                        0, false, com.ecat.integration.logicdevice.LogicState.LCommandAttribute.class));
+                defs.add(AsmLogicAttributeDefs.numericDef(PRESSURE_ATTR,
+                        AttributeClass.PRESSURE, PressureUnit.KPA, PressureUnit.KPA, 3));
+                defs.add(AsmLogicAttributeDefs.textDef(TEXT_ATTR, AttributeClass.TEXT));
+                defs.add(AsmLogicAttributeDefs.selectDef(SELECT_ATTR,
+                        AttributeClass.ALARM_STATUS, false,
+                        StatusOptions.AlarmStatusOptions.OPTIONS));
+                defs.add(AsmLogicAttributeDefs.selectDef(BINARY_ATTR,
+                        AttributeClass.STATUS, true,
+                        AccessControl.LockStatusOptions.OPTIONS));
+                defs.add(AsmLogicAttributeDefs.timeDef(TIME_ATTR, AttributeClass.TIME));
+                defs.add(AsmLogicAttributeDefs.numericDef(TEST_DIMENSIONLESS_ATTR,
+                        AttributeClass.PRESSURE, null, null, 3));
+                defs.add(AsmLogicAttributeDefs.textDef(I18N_ATTR, AttributeClass.TEXT));
+                defs.add(AsmLogicAttributeDefs.numericDef(TEST_TIE_ATTR,
+                        AttributeClass.PRESSURE, null, null, 3));
+                defs.add(AsmLogicAttributeDefs.commandDef(COMMAND_ATTR, AttributeClass.COMMAND,
+                        false, StandardGas.ACTIVATE_COMMANDS));
                 // COMMAND_ATTR 上方已覆盖复杂/命令类：caller-defined snapshot 显式拒绝，不落 displayValue 投影。
                 return defs;
             }
@@ -389,7 +406,6 @@ class AsmSnapshotCustomSnapshotTest {
             @Override public void start() {}
             @Override public void stop() {}
             @Override public void release() {}
-            @Override public Map<String, ILogicAttribute<?>> getAttrMap() { return new HashMap<>(); }
         };
         device.load(EcatCore.getInstance());
         device.init();
@@ -403,24 +419,6 @@ class AsmSnapshotCustomSnapshotTest {
                 new DeviceLifecycleEvent(device.getId(), "com.ecat:integration-env-air-station-manager",
                         device.getId(), device.getId(), DeviceLifecycleEvent.Action.CREATE),
                 EventContext.root(EventContext.Source.SYSTEM, null)));
-    }
-
-    private static LogicAttributeDefine dimensionlessDef(String attrId) {
-        return new LogicAttributeDefine(attrId, AttributeClass.PRESSURE, null, null,
-                3, false, Double.class);
-    }
-
-    private static LogicAttributeDefine numericDef(String attrId, AttributeClass attrClass) {
-        return new LogicAttributeDefine(attrId, attrClass, PressureUnit.KPA, PressureUnit.KPA,
-                3, false, Double.class);
-    }
-
-    private static LogicAttributeDefine textDef(String attrId, AttributeClass attrClass) {
-        return projectionDef(attrId, attrClass, String.class);
-    }
-
-    private static LogicAttributeDefine projectionDef(String attrId, AttributeClass attrClass, Class<?> valueType) {
-        return new LogicAttributeDefine(attrId, attrClass, null, null, 0, false, valueType);
     }
 
     private static AttributeBase<?> pressureState(String displayValue, Double value, PressureUnit unit) {

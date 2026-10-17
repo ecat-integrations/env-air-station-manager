@@ -5,6 +5,8 @@ import com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmConfigStat
 import com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmConfigUnit;
 import com.ecat.integration.EnvAirStationManagerIntegration.service.AsmConfigService;
 import com.ecat.integration.EnvAirStationManagerIntegration.service.AsmDeviceLabelService;
+import com.ecat.core.State.AttributeClass;
+import com.ecat.integration.EnvAirStationManagerIntegration.service.AsmLogicAttributeDefs;
 import com.ecat.integration.logicdevice.LogicDevice.LogicDevice;
 import com.ecat.integration.logicdevice.LogicState.LogicAttributeDefine;
 import com.ruoyi.common.core.domain.AjaxResult;
@@ -61,8 +63,8 @@ class AsmConfigControllerTest {
         when(configService.listStatConfig()).thenReturn(Collections.singletonList(stat));
 
         LogicDevice th = mock(LogicDevice.class, withSettings().lenient());
-        LogicAttributeDefine def = new LogicAttributeDefine();
-        def.setAttrId("temperature");
+        LogicAttributeDefine def = AsmLogicAttributeDefs.numericDef(
+                "temperature", AttributeClass.NUMERIC, null, null, 2);
         def.setDisplayName("温度");
         when(th.getAttrDefs()).thenReturn(Collections.singletonList(def));
         AsmConfigController controllerWithRegistry = new AsmConfigController(configService,

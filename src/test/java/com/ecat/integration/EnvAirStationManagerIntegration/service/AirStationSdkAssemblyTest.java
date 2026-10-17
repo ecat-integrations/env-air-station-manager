@@ -8,6 +8,7 @@ import com.ecat.core.Bus.event.EventContext;
 import com.ecat.core.ConfigEntry.ConfigEntry;
 import com.ecat.core.Device.DeviceRegistry;
 import com.ecat.core.State.AttributeBase;
+import com.ecat.core.State.AttributeClass;
 import com.ecat.integration.EnvAirStationManagerIntegration.api.AirStationSdk;
 import com.ecat.integration.EnvAirStationManagerIntegration.api.AsmParamKey;
 import com.ecat.integration.EnvAirStationManagerIntegration.api.SdkAlarmEntry;
@@ -30,7 +31,6 @@ import com.ecat.integration.EnvAirStationManagerIntegration.support.AsmStatGranu
 import com.ecat.integration.EnvAirStationManagerIntegration.support.AsmUnitPurpose;
 import com.ecat.integration.logicdevice.LogicDevice.LogicDevice;
 import com.ecat.integration.logicdevice.LogicDeviceManager;
-import com.ecat.integration.logicdevice.LogicState.ILogicAttribute;
 import com.ecat.integration.logicdevice.LogicState.LogicAttributeDefine;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -213,8 +213,8 @@ class AirStationSdkAssemblyTest {
         entry.setData(data);
         // attrDefs 是 alarm 条目 attrLabel 的解析源（displayName 唯一来源，同生产 LogicDevice 形态）；
         // listStatParams 的 displayName 走 live attrs（device.setAttribute 注入），两路互不影响
-        LogicAttributeDefine voltageDef = new LogicAttributeDefine();
-        voltageDef.setAttrId("voltage");
+        LogicAttributeDefine voltageDef = AsmLogicAttributeDefs.numericDef(
+                "voltage", AttributeClass.NUMERIC, null, null, 2);
         voltageDef.setDisplayName("供电电压");
         List<LogicAttributeDefine> defs = Collections.singletonList(voltageDef);
         LogicDevice device = new LogicDevice(entry) {
@@ -223,7 +223,6 @@ class AirStationSdkAssemblyTest {
             @Override public void start() {}
             @Override public void stop() {}
             @Override public void release() {}
-            @Override public Map<String, ILogicAttribute<?>> getAttrMap() { return new HashMap<>(); }
         };
         device.load(com.ecat.core.EcatCore.getInstance());
         device.init();
