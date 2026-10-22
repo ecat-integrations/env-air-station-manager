@@ -5,6 +5,6 @@ import { typeOfUid } from '../constants'
 export default {
   typeKey: 'air_conditioner',
   matches(uid) { return typeOfUid(uid) === 'air_conditioner' },
-  attrOrder: ['setpoint_temp', 'power_status', 'fan_speed', 'running_mode'],
-  layout: 'grid2',   // 双列（温度调节独占一行，其余三项两列）
+  attrOrder: ['setpoint_temp', 'running_current', 'power_status', 'fan_speed', 'running_mode'],
+  layout: 'grid2',   // 双列（温度/电流优先，其余控制项两列）
 }

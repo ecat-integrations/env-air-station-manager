@@ -73,6 +73,8 @@ function normalizeCommand(cmd) {
     value: cmd.value,                                     // 枚举 key / 数值串（DM 视角的当前值）
     options: cmd.options ? cmd.options.map(o => ({ ...o })) : undefined,
     valueUtil: cmd.valueUtil || '',
+    // 只读渲染器读取 liveUnit。ASM snapshot 缺 valueText/unit 时不能丢 DM 配置单位。
+    liveUnit: cmd.valueUtil || '',
     changeType: cmd.changeType || ((cmd.displayType === 'command' || cmd.displayType === 'select' || cmd.displayType === 'command_stateless') ? 'text' : 'int'),
     changeStep: cmd.changeStep != null ? cmd.changeStep : (cmd.changeType === 'float' ? Math.pow(10, -(cmd.changeNumberDecimal || 0)) : 1),
     changeNumberMin: cmd.changeNumberMin != null ? cmd.changeNumberMin : 0,
