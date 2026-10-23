@@ -7,6 +7,7 @@ import com.ecat.core.State.Unit.UnitInfoFactory;
 import com.ecat.core.Utils.Log;
 import com.ecat.core.Utils.LogFactory;
 import com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmControlRecord;
+import com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmControlSubmission;
 import com.ecat.integration.EnvAirStationManagerIntegration.mapper.AsmControlRecordMapper;
 import com.ecat.integration.EnvAirStationManagerIntegration.support.AsmControlAction;
 import com.ecat.integration.EnvAirStationManagerIntegration.support.AsmControlOrigin;
@@ -26,6 +27,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -90,6 +92,8 @@ public class AsmControlService {
      * 自建执行资源（I-4 B 处置，见类 javadoc）。
      */
     private ScheduledExecutorService prodScheduler;
+    /** REST 等非链式调用方的终态回调池（链式组合调用方必须传自有 executor）。 */
+    private final Executor notifyExecutor;
     private final Clock clock;
     private final Duration timeout;
     /** 控制终态帧广播（尽力而为通道，失败不得影响审计落库）。 */
@@ -112,6 +116,11 @@ public class AsmControlService {
             t.setDaemon(true);
             return t;
         });
+        this.notifyExecutor = Executors.newSingleThreadExecutor(r -> {
+            Thread t = new Thread(r, "asm-control-notify");
+            t.setDaemon(true);
+            return t;
+        });
         this.timeoutScheduler = (task, delay) ->
                 prodScheduler.schedule(task, delay.toMillis(), TimeUnit.MILLISECONDS);
         this.clock = Clock.systemDefaultZone();
@@ -130,6 +139,7 @@ public class AsmControlService {
         this.clock = clock;
         this.timeout = timeout;
         this.broadcaster = broadcaster;
+        this.notifyExecutor = null;
     }
 
     /**
@@ -150,6 +160,9 @@ public class AsmControlService {
         }
         if (prodScheduler != null) {
             prodScheduler.shutdownNow();
+        }
+        if (notifyExecutor != null) {
+            ((ExecutorService) notifyExecutor).shutdownNow();
         }
     }
 
@@ -177,9 +190,51 @@ public class AsmControlService {
      * @return 审计记录（id 已回填；result 终态异步回填）
      * @throws IllegalArgumentException origin/caller/value 空、uid 非站房前缀、设备或 attr 不存在
      * @throws IllegalStateException     attr 不可写（canValueChange=false）
+     * @deprecated 新调用方使用 {@link #executeAsync(AsmControlOrigin, String, String, String, String,
+     * UnitInfo, Executor)} 获取终态完成原语；本方法观察一个版本周期后删除。
      */
+    @Deprecated
     public AsmControlRecord execute(AsmControlOrigin origin, String caller, String uid,
                                     String attrId, String value, UnitInfo fromUnit) {
+        PreparedControl prepared = prepareAndInsert(origin, caller, uid, attrId, value, fromUnit);
+        AsmControlRecord record = prepared.record;
+        Instant start = clock.instant();
+        AtomicBoolean finalized = new AtomicBoolean(false);
+
+        controlExecutor.execute(() -> {
+            try {
+                CompletableFuture<Boolean> write = fromUnit == null
+                        ? prepared.attr.setDisplayValue(value)
+                        : prepared.attr.setDisplayValue(value, fromUnit);
+                write.whenComplete((ok, ex) -> {
+                    if (ex != null) {
+                        finalizeOutcome(record, finalized, start, AsmControlResult.FAILED,
+                                ex.getMessage() == null ? ex.toString() : ex.getMessage());
+                    } else if (Boolean.TRUE.equals(ok)) {
+                        finalizeOutcome(record, finalized, start, AsmControlResult.SUCCESS, null);
+                    } else {
+                        finalizeOutcome(record, finalized, start, AsmControlResult.FAILED,
+                                "设备返回失败（setDisplayValue=false）");
+                    }
+                });
+            } catch (RuntimeException e) {
+                finalizeOutcome(record, finalized, start, AsmControlResult.FAILED,
+                        e.getMessage() == null ? e.toString() : e.getMessage());
+            }
+        });
+
+        timeoutScheduler.schedule(() ->
+                        finalizeOutcome(record, finalized, start, AsmControlResult.TIMEOUT, null),
+                timeout);
+        return record;
+    }
+
+    /**
+     * execute/executeAsync 共用的同步受理段：参数校验 + 设备/attr 解析 + before 快照 +
+     * record 构建 + mapper.insert（行为等价的机械抽取）。
+     */
+    private PreparedControl prepareAndInsert(AsmControlOrigin origin, String caller, String uid,
+                                             String attrId, String value, UnitInfo fromUnit) {
         if (origin == null) {
             throw new IllegalArgumentException("origin 不能为空（LOCAL/REMOTE）");
         }
@@ -219,36 +274,104 @@ public class AsmControlService {
                 .result(AsmControlResult.PENDING)
                 .build();
         recordMapper.insert(record);
+        return new PreparedControl(record, attr);
+    }
 
-        Instant start = clock.instant();
-        AtomicBoolean finalized = new AtomicBoolean(false);
+    /**
+     * 执行一次可链式等待的控制写：同步完成校验、设备/属性解析、before 快照和 PENDING 审计落库；
+     * 终态落库并广播后，在调用方传入的 callback executor 线程完成 {@code completion}。
+     *
+     * <p><b>线程合同</b>：{@code completion} 只可能在 {@code callbackExecutor} 线程完成；
+     * 链式组合使用 {@code thenCompose(fn)} 或 {@code thenComposeAsync(fn, yourExecutor)}，
+     * 禁止无 executor 的 {@code thenComposeAsync(fn)}（ForkJoinPool.commonPool 边界失控）。
+     * {@code callbackExecutor} 生命周期须覆盖控制执行期；桥接 lambda 只负责投递回调，不承载业务逻辑。</p>
+     *
+     * <p>超时起点是控制任务被 controlExecutor 拾起时（而非提交时），链式排队不吃超时预算。
+     * callbackExecutor 拒绝回调投递时，{@code completion} 以 {@link IllegalStateException} 异常完成；
+     * 审计终态已在 {@link #finalizeOutcome} 落库，不因回调失败改写。</p>
+     *
+     * @param origin            调用来源（LOCAL=本站/集成自身发起；REMOTE=第三方代传远程侧指令）
+     * @param caller            严格非空：LOCAL=发起方集成坐标；REMOTE=最终用户标识
+     * @param uid               站房逻辑设备 uniqueId（logicdevice_station.*）
+     * @param attrId            属性 id（须存在且可写）
+     * @param value             请求值（Command 型为选项 key）
+     * @param fromUnit          请求值单位（null=不指定单位；非空=按该单位换算写入）
+     * @param callbackExecutor  终态回调 executor（REST 等非链式调用方可用
+     *                          {@link #notifyExecutor()}；链式调用方必须传自有 executor）
+     * @return 不可变提交句柄：record 提交即可读，completion 终态完成于 callbackExecutor
+     * @throws IllegalArgumentException origin/caller/value 空、uid 非站房前缀、设备或 attr 不存在、
+     *                                  callbackExecutor 为 null
+     * @throws IllegalStateException     attr 不可写（canValueChange=false）
+     */
+    public AsmControlSubmission executeAsync(AsmControlOrigin origin, String caller, String uid,
+                                             String attrId, String value, UnitInfo fromUnit,
+                                             Executor callbackExecutor) {
+        if (callbackExecutor == null) {
+            throw new IllegalArgumentException("callbackExecutor 不能为空（REST 可传 notifyExecutor()；"
+                    + "链式调用方必须传自有 executor）");
+        }
+        PreparedControl prepared = prepareAndInsert(origin, caller, uid, attrId, value, fromUnit);
+        AsmControlRecord record = prepared.record;
+        CompletableFuture<AsmControlRecord> internal = new CompletableFuture<>();
+        CompletableFuture<AsmControlRecord> bounded = new CompletableFuture<>();
+
+        // 桥接先于执行任务注册：write 同步完成时 internal 可能立刻完成，
+        // 若后注册会让 bounded 抢先在调用线程完成，破坏“只完成于 callbackExecutor”合同。
+        internal.thenAccept(done -> {
+            try {
+                callbackExecutor.execute(() -> bounded.complete(done));
+            } catch (RejectedExecutionException e) {
+                bounded.completeExceptionally(
+                        new IllegalStateException("回调 executor 已不可用", e));
+            }
+        });
 
         controlExecutor.execute(() -> {
+            Instant start = clock.instant();
+            AtomicBoolean finalized = new AtomicBoolean(false);
             try {
+                timeoutScheduler.schedule(() ->
+                                finalizeOutcome(record, finalized, start,
+                                        AsmControlResult.TIMEOUT, null, internal),
+                        timeout);
                 CompletableFuture<Boolean> write = fromUnit == null
-                        ? attr.setDisplayValue(value)
-                        : attr.setDisplayValue(value, fromUnit);
+                        ? prepared.attr.setDisplayValue(value)
+                        : prepared.attr.setDisplayValue(value, fromUnit);
                 write.whenComplete((ok, ex) -> {
                     if (ex != null) {
                         finalizeOutcome(record, finalized, start, AsmControlResult.FAILED,
-                                ex.getMessage() == null ? ex.toString() : ex.getMessage());
+                                ex.getMessage() == null ? ex.toString() : ex.getMessage(), internal);
                     } else if (Boolean.TRUE.equals(ok)) {
-                        finalizeOutcome(record, finalized, start, AsmControlResult.SUCCESS, null);
+                        finalizeOutcome(record, finalized, start, AsmControlResult.SUCCESS, null,
+                                internal);
                     } else {
                         finalizeOutcome(record, finalized, start, AsmControlResult.FAILED,
-                                "设备返回失败（setDisplayValue=false）");
+                                "设备返回失败（setDisplayValue=false）", internal);
                     }
                 });
             } catch (RuntimeException e) {
                 finalizeOutcome(record, finalized, start, AsmControlResult.FAILED,
-                        e.getMessage() == null ? e.toString() : e.getMessage());
+                        e.getMessage() == null ? e.toString() : e.getMessage(), internal);
             }
         });
 
-        timeoutScheduler.schedule(() ->
-                        finalizeOutcome(record, finalized, start, AsmControlResult.TIMEOUT, null),
-                timeout);
-        return record;
+        return new AsmControlSubmission(record, bounded);
+    }
+
+    /** 同步受理产物：执行段复用同一次解析出的 attr，避免 resolver 二次查询造成行为漂移。 */
+    private static final class PreparedControl {
+        private final AsmControlRecord record;
+        private final AttributeBase<?> attr;
+
+        private PreparedControl(AsmControlRecord record, AttributeBase<?> attr) {
+            this.record = record;
+            this.attr = attr;
+        }
+    }
+
+    /** 供 REST 等不做链式组合的调用方传给 executeAsync；链式调用方必须传自有 executor。 */
+    public Executor notifyExecutor() {
+        return notifyExecutor;
     }
 
     /**
@@ -259,6 +382,12 @@ public class AsmControlService {
      */
     private void finalizeOutcome(AsmControlRecord record, AtomicBoolean finalized,
                                  Instant start, AsmControlResult result, String error) {
+        finalizeOutcome(record, finalized, start, result, error, null);
+    }
+
+    private void finalizeOutcome(AsmControlRecord record, AtomicBoolean finalized,
+                                 Instant start, AsmControlResult result, String error,
+                                 CompletableFuture<AsmControlRecord> completion) {
         if (!finalized.compareAndSet(false, true)) {
             return;
         }
@@ -272,6 +401,9 @@ public class AsmControlService {
             log.warn("[诊断调试] 控制执行终态=" + result + " id=" + record.getId()
                     + " uid=" + record.getLogicDeviceUniqueId() + " attr=" + record.getAttrId()
                     + (error == null ? "" : " error=" + error));
+        }
+        if (completion != null) {
+            completion.complete(record);
         }
     }
 

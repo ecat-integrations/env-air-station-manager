@@ -7,6 +7,7 @@ import com.ecat.integration.EnvAirStationManagerIntegration.api.SdkControlReques
 import com.ecat.integration.EnvAirStationManagerIntegration.api.SdkControlResult;
 import com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmAlarmRecord;
 import com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmAlarmRule;
+import com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmControlSubmission;
 import com.ecat.integration.EnvAirStationManagerIntegration.mapper.AsmAlarmRecordMapper;
 import com.ecat.integration.EnvAirStationManagerIntegration.api.AsmParamKey;
 import com.ecat.integration.EnvAirStationManagerIntegration.api.SdkCustomSnapshotAttr;
@@ -40,6 +41,8 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
 
 /**
  * {@link AirStationSdk} 实现——外部集成读 ASM stat 聚合数据/站房当前态的出口。
@@ -226,6 +229,11 @@ public class AirStationSdkImpl implements AirStationSdk {
         return out;
     }
 
+    /**
+     * 新调用方使用 {@link #controlAsync(SdkControlRequest, Executor)} 获取终态完成原语；
+     * 本方法观察一个版本周期后删除。
+     */
+    @Deprecated
     @Override
     public SdkControlResult control(SdkControlRequest request) {
         validateControlRequest(request);
@@ -234,6 +242,42 @@ public class AirStationSdkImpl implements AirStationSdk {
         UnitInfo fromUnit = AsmControlService.parseFromUnit(request.getUnit());
         AsmControlRecord record = controlService.execute(request.getOrigin(), request.getCaller(),
                 request.getUid(), request.getAttrId(), request.getValue(), fromUnit);
+        return SdkControlResult.builder()
+                .recordId(record.getId())
+                .origin(record.getOrigin() == null ? null : record.getOrigin().name())
+                .result(record.getResult() == null ? null : record.getResult().name())
+                .error(record.getError())
+                .durationMs(record.getDurationMs())
+                .build();
+    }
+
+    /**
+     * 执行一次可等待的站房设备控制写——复用统一控制服务的异步收口。
+     *
+     * <p>{@code callbackExecutor} 合同与 {@link AsmControlService#executeAsync} 相同：
+     * REST 等非链式调用方可传 {@code controlService.notifyExecutor()}；链式调用方必须传自有 executor，
+     * 结果映射只做纯投影转换、零 IO。</p>
+     *
+     * @param request           控制请求（契约与 {@link #control} 相同）
+     * @param callbackExecutor  终态回调 executor，不得为 null
+     * @return 终态完成后携带控制审计行投影的 Future
+     * @throws IllegalArgumentException 请求非法或 callbackExecutor 为 null
+     * @throws IllegalStateException    属性不可写
+     */
+    @Override
+    public CompletableFuture<SdkControlResult> controlAsync(SdkControlRequest request,
+                                                            Executor callbackExecutor) {
+        validateControlRequest(request);
+        // unit 三态在边界一次裁定：null=调用方漏传（拒绝）；空串=明确不指定单位（nullUnit）；非空=full string
+        UnitInfo fromUnit = AsmControlService.parseFromUnit(request.getUnit());
+        AsmControlSubmission submission = controlService.executeAsync(request.getOrigin(),
+                request.getCaller(), request.getUid(), request.getAttrId(), request.getValue(),
+                fromUnit, callbackExecutor);
+        return submission.getCompletion().thenApply(AirStationSdkImpl::mapToSdkResult);
+    }
+
+    /** 控制审计行 → SDK 稳定投影；controlAsync 复用同一映射，只读字段且零 IO。 */
+    private static SdkControlResult mapToSdkResult(AsmControlRecord record) {
         return SdkControlResult.builder()
                 .recordId(record.getId())
                 .origin(record.getOrigin() == null ? null : record.getOrigin().name())

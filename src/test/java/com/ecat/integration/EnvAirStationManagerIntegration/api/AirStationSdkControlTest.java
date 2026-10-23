@@ -3,6 +3,7 @@ package com.ecat.integration.EnvAirStationManagerIntegration.api;
 import com.ecat.core.State.Unit.AirVolumeUnit;
 import com.ecat.core.State.Unit.TemperatureUnit;
 import com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmControlRecord;
+import com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmControlSubmission;
 import com.ecat.integration.EnvAirStationManagerIntegration.mapper.AsmAlarmRecordMapper;
 import com.ecat.integration.EnvAirStationManagerIntegration.mapper.AsmHistoryQueryMapper;
 import com.ecat.integration.EnvAirStationManagerIntegration.service.AsmControlService;
@@ -18,6 +19,10 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -90,6 +95,42 @@ class AirStationSdkControlTest {
         assertEquals(Long.valueOf(11L), out.getRecordId());
         assertEquals("LOCAL", out.getOrigin(), "origin 回显请求声明值");
         assertEquals("SUCCESS", out.getResult());
+        assertEquals(Long.valueOf(120L), out.getDurationMs());
+    }
+
+    @Test
+    void controlAsync_mapsTerminalRecordOnInjectedExecutor() {
+        AsmControlRecord record = AsmControlRecord.builder()
+                .id(16L).origin(AsmControlOrigin.LOCAL).caller(CALLER)
+                .result(AsmControlResult.SUCCESS).error(null).durationMs(120L).build();
+        AsmControlSubmission submission = new AsmControlSubmission(record, new CompletableFuture<>());
+        AtomicReference<String> completionThread = new AtomicReference<>();
+        Executor callbackExecutor = rawTask -> {
+            Thread worker = new Thread(rawTask, "sdk-callback-executor");
+            worker.start();
+            try {
+                worker.join();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("等待 SDK callback executor 线程结束被中断", e);
+            }
+        };
+        when(controlService.executeAsync(AsmControlOrigin.LOCAL, CALLER, UID, "temperature",
+                "30.0", null, callbackExecutor)).thenReturn(submission);
+
+        CompletableFuture<SdkControlResult> future =
+                ((AirStationSdkImpl) sdk).controlAsync(
+                        request("", AsmControlOrigin.LOCAL, CALLER), callbackExecutor);
+        future.thenAccept(result -> completionThread.set(Thread.currentThread().getName()));
+        callbackExecutor.execute(() -> submission.getCompletion().complete(record));
+        SdkControlResult out = future.join();
+
+        assertEquals("sdk-callback-executor", completionThread.get(),
+                "controlAsync 结果 CF 须在注入 executor 线程完成");
+        assertEquals(Long.valueOf(16L), out.getRecordId());
+        assertEquals("LOCAL", out.getOrigin());
+        assertEquals("SUCCESS", out.getResult());
+        assertNull(out.getError());
         assertEquals(Long.valueOf(120L), out.getDurationMs());
     }
 

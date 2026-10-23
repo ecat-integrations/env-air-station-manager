@@ -6,6 +6,8 @@ import com.ecat.integration.EnvAirStationManagerIntegration.support.AsmStatGranu
 
 import java.time.Instant;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
 
 /**
  * ASM stat/snapshot 数据对外查询 SDK——外部集成访问 {@code asm_stat_*} 聚合数据与站房设备当前态的
@@ -171,6 +173,34 @@ public interface AirStationSdk {
      * @throws IllegalArgumentException 请求为空 / 字段空白 / unit 为 null 或非法 full string /
      *                                  origin 为 null / 未知设备或属性
      * @throws IllegalStateException     属性不可写（canValueChange=false）
+     * @deprecated 新调用方使用 {@link #controlAsync(SdkControlRequest, Executor)} 获取终态完成原语
+     * （可链式串行/并行组合）；本方法观察一个版本周期后删除。
      */
+    @Deprecated
     SdkControlResult control(SdkControlRequest request);
+
+    /**
+     * 执行一次可等待的站房设备控制写（终态完成于调用方 executor）。
+     *
+     * <p><b>线程合同</b>：返回的 future 只可能在 {@code callbackExecutor} 线程完成；
+     * 链式组合使用 {@code thenCompose(fn)} 或 {@code thenComposeAsync(fn, yourExecutor)}，
+     * 禁止无 executor 的 {@code thenComposeAsync(fn)}（ForkJoinPool.commonPool 边界失控）。
+     * {@code callbackExecutor} 生命周期须覆盖控制执行期。</p>
+     *
+     * <p>示例（同设备多参数串行）：</p>
+     * <pre>{@code
+     * sdk.controlAsync(buildTempRequest(), myLane)
+     *    .thenCompose(r -> sdk.controlAsync(buildModeRequest(), myLane))
+     *    .thenCompose(r -> sdk.controlAsync(buildFanSpeedRequest(), myLane));
+     * }</pre>
+     *
+     * @param request          控制请求（契约与 {@link #control} 相同）
+     * @param callbackExecutor 终态回调 executor（不得为 null；调用方自管生命周期）
+     * @return 终态完成后携带控制审计行投影的 future
+     * @throws IllegalArgumentException 请求为空 / 字段空白 / unit 为 null 或非法 full string /
+     *                                  origin 为 null / 未知设备或属性 / callbackExecutor 为 null
+     * @throws IllegalStateException     属性不可写（canValueChange=false）
+     */
+    CompletableFuture<SdkControlResult> controlAsync(SdkControlRequest request,
+                                                     Executor callbackExecutor);
 }

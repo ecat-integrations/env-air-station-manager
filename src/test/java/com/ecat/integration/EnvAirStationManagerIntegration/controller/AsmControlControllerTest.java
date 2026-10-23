@@ -2,6 +2,7 @@ package com.ecat.integration.EnvAirStationManagerIntegration.controller;
 
 import com.ecat.core.State.Unit.TemperatureUnit;
 import com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmControlRecord;
+import com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmControlSubmission;
 import com.ecat.integration.EnvAirStationManagerIntegration.mapper.AsmControlRecordMapper;
 import com.ecat.integration.EnvAirStationManagerIntegration.service.AsmControlService;
 import com.ecat.integration.EnvAirStationManagerIntegration.support.AsmControlOrigin;
@@ -13,6 +14,9 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
@@ -22,6 +26,7 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
+import static org.mockito.ArgumentMatchers.same;
 
 /**
  * 本站 web 控制入口：caller 取认证 principal 透传、origin=LOCAL（本站页面操作=本站自身发起，
@@ -52,14 +57,17 @@ class AsmControlControllerTest {
                 .logicDeviceUniqueId("logicdevice_station.th").attrId("temperature")
                 .action("WRITE").requestedValue("30.0")
                 .result(AsmControlResult.PENDING).build();
-        when(controlService.execute(AsmControlOrigin.LOCAL, "admin",
-                "logicdevice_station.th", "temperature", "30.0", null)).thenReturn(rec);
+        Executor notifyExecutor = Runnable::run;
+        when(controlService.notifyExecutor()).thenReturn(notifyExecutor);
+        when(controlService.executeAsync(AsmControlOrigin.LOCAL, "admin",
+                "logicdevice_station.th", "temperature", "30.0", null, notifyExecutor))
+                .thenReturn(new AsmControlSubmission(rec, CompletableFuture.completedFuture(rec)));
 
         AjaxResult result = controller.executeForCaller(new AsmControlController.AsmControlRequest(
                 "logicdevice_station.th", "temperature", "30.0"), "admin");
 
-        verify(controlService).execute(AsmControlOrigin.LOCAL, "admin",
-                "logicdevice_station.th", "temperature", "30.0", null);
+        verify(controlService).executeAsync(AsmControlOrigin.LOCAL, "admin",
+                "logicdevice_station.th", "temperature", "30.0", null, notifyExecutor);
         assertEquals(9L, ((AsmControlRecord) result.get(AjaxResult.DATA_TAG)).getId());
         assertEquals(AsmControlResult.PENDING,
                 ((AsmControlRecord) result.get(AjaxResult.DATA_TAG)).getResult());
@@ -70,21 +78,27 @@ class AsmControlControllerTest {
         AsmControlController.AsmControlRequest request = new AsmControlController.AsmControlRequest(
                 "logicdevice_station.th", "temperature", "26.5");
         request.setUnit("TemperatureUnit.CELSIUS");
-        when(controlService.execute(AsmControlOrigin.LOCAL, "admin", "logicdevice_station.th",
-                "temperature", "26.5", TemperatureUnit.CELSIUS))
-                .thenReturn(AsmControlRecord.builder().id(10L).build());
+        Executor notifyExecutor = Runnable::run;
+        AsmControlRecord record = AsmControlRecord.builder().id(10L).build();
+        when(controlService.notifyExecutor()).thenReturn(notifyExecutor);
+        when(controlService.executeAsync(AsmControlOrigin.LOCAL, "admin", "logicdevice_station.th",
+                "temperature", "26.5", TemperatureUnit.CELSIUS, notifyExecutor))
+                .thenReturn(new AsmControlSubmission(record, CompletableFuture.completedFuture(record)));
 
         controller.executeForCaller(request, "admin");
 
-        verify(controlService).execute(AsmControlOrigin.LOCAL, "admin", "logicdevice_station.th",
-                "temperature", "26.5", TemperatureUnit.CELSIUS);
+        verify(controlService).executeAsync(AsmControlOrigin.LOCAL, "admin", "logicdevice_station.th",
+                "temperature", "26.5", TemperatureUnit.CELSIUS, notifyExecutor);
     }
 
     @Test
     void execute_blankOrNullUnit_meansNoUnitConversion() {
         // 向后兼容锁：存量调用方不带 unit 字段（缺省 ""）/显式 null → 均按属性默认单位写入
-        when(controlService.execute(any(), any(), any(), any(), any(), any()))
-                .thenReturn(AsmControlRecord.builder().id(11L).build());
+        Executor notifyExecutor = Runnable::run;
+        AsmControlRecord record = AsmControlRecord.builder().id(11L).build();
+        when(controlService.notifyExecutor()).thenReturn(notifyExecutor);
+        when(controlService.executeAsync(any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new AsmControlSubmission(record, CompletableFuture.completedFuture(record)));
 
         controller.executeForCaller(new AsmControlController.AsmControlRequest(
                 "logicdevice_station.th", "temperature", "26.5"), "admin");
@@ -93,8 +107,9 @@ class AsmControlControllerTest {
         explicitNull.setUnit(null);
         controller.executeForCaller(explicitNull, "admin");
 
-        verify(controlService, times(2)).execute(eq(AsmControlOrigin.LOCAL), eq("admin"),
-                eq("logicdevice_station.th"), eq("temperature"), eq("26.5"), isNull());
+        verify(controlService, times(2)).executeAsync(eq(AsmControlOrigin.LOCAL), eq("admin"),
+                eq("logicdevice_station.th"), eq("temperature"), eq("26.5"), isNull(),
+                same(notifyExecutor));
     }
 
     @Test

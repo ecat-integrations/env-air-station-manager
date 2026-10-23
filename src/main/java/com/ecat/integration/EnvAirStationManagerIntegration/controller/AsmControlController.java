@@ -2,6 +2,7 @@ package com.ecat.integration.EnvAirStationManagerIntegration.controller;
 
 import com.ecat.core.State.UnitInfo;
 import com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmControlRecord;
+import com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmControlSubmission;
 import com.ecat.integration.EnvAirStationManagerIntegration.mapper.AsmControlRecordMapper;
 import com.ecat.integration.EnvAirStationManagerIntegration.service.AsmControlService;
 import com.ecat.integration.EnvAirStationManagerIntegration.support.AsmControlOrigin;
@@ -97,9 +98,10 @@ public class AsmControlController extends BaseController {
         }
         // unit 缺省/空串=不指定单位（向后兼容：存量调用方不带 unit 字段行为不变）；非法 full string 400 拒绝
         UnitInfo fromUnit = AsmControlService.parseFromUnit(request.getUnit());
-        AsmControlRecord record = controlService.execute(AsmControlOrigin.LOCAL, caller,
-                request.getUid(), request.getAttrId(), request.getValue(), fromUnit);
-        return AjaxResult.success(record);
+        AsmControlSubmission submission = controlService.executeAsync(AsmControlOrigin.LOCAL, caller,
+                request.getUid(), request.getAttrId(), request.getValue(), fromUnit,
+                controlService.notifyExecutor());
+        return AjaxResult.success(submission.getRecord());
     }
 
     /**

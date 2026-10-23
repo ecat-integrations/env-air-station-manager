@@ -8,6 +8,7 @@ import com.ecat.core.State.Unit.AirMassUnit;
 import com.ecat.core.State.Unit.TemperatureUnit;
 import com.ecat.core.State.UnitInfo;
 import com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmControlRecord;
+import com.ecat.integration.EnvAirStationManagerIntegration.domain.AsmControlSubmission;
 import com.ecat.integration.EnvAirStationManagerIntegration.mapper.AsmControlRecordMapper;
 import com.ecat.integration.EnvAirStationManagerIntegration.sse.AsmControlCompletedEvent;
 import com.ecat.integration.EnvAirStationManagerIntegration.sse.AsmSseBroadcaster;
@@ -30,10 +31,15 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -46,6 +52,7 @@ import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
@@ -541,6 +548,174 @@ class AsmControlServiceTest {
         assertEquals(AsmControlResult.FAILED, rec.getResult());
         assertTrue(rec.getError().contains("unit classes"), "error 须留换算失败原因: " + rec.getError());
         assertEquals("30.0 " + AirMassUnit.UGM3.getFullUnitString(), rec.getRequestedValue());
+    }
+
+    // ===== executeAsync：提交句柄、callback executor 线程合同与拾起时超时起点 =====
+
+    @Test
+    void executeAsync_completionCompletesOnCallbackExecutorThread() {
+        stubInsertWithId(41L);
+        WritableAttr attr = okAttr("temperature", "25.5");
+        when(stationDevice.getAttrs()).thenReturn(attrs(attr));
+
+        AtomicReference<String> callbackThread = new AtomicReference<>();
+        AtomicReference<String> completionThread = new AtomicReference<>();
+        Executor callbackExecutor = rawTask -> {
+            Runnable task = () -> {
+                callbackThread.set(Thread.currentThread().getName());
+                rawTask.run();
+            };
+            Thread worker = new Thread(task, "callback-executor");
+            worker.start();
+            try {
+                worker.join();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("等待 callback executor 线程结束被中断", e);
+            }
+        };
+
+        AsmControlSubmission submission = service.executeAsync(
+                AsmControlOrigin.LOCAL, "consumer-x", "logicdevice_station.th",
+                "temperature", "30.0", null, callbackExecutor);
+        submission.getCompletion().thenAccept(done -> {
+            completionThread.set(Thread.currentThread().getName());
+        });
+        executor.runAll();
+
+        assertEquals(AsmControlResult.SUCCESS, submission.getRecord().getResult());
+        assertEquals("callback-executor", completionThread.get(),
+                "completion 终态完成动作须发生在注入 executor 线程");
+        assertEquals(completionThread.get(), callbackThread.get());
+    }
+
+    @Test
+    void executeAsync_recordReadableImmediatelyBeforeControlTaskRuns() {
+        stubInsertWithId(42L);
+        WritableAttr attr = new WritableAttr("temperature", true,
+                state("25.5", TemperatureUnit.CELSIUS), (v, self) -> new CompletableFuture<>());
+        when(stationDevice.getAttrs()).thenReturn(attrs(attr));
+
+        AsmControlSubmission submission = service.executeAsync(
+                AsmControlOrigin.LOCAL, "consumer-x", "logicdevice_station.th",
+                "temperature", "30.0", null, Runnable::run);
+
+        assertEquals(42L, submission.getRecord().getId());
+        assertEquals(AsmControlResult.PENDING, submission.getRecord().getResult());
+        assertFalse(submission.getCompletion().isDone());
+        verify(recordMapper, never()).updateResult(any(AsmControlRecord.class));
+    }
+
+    @Test
+    void executeAsync_timeoutStartsWhenControlTaskPickedUpNotAtSubmission() {
+        stubInsertWithId(43L);
+        WritableAttr attr = new WritableAttr("temperature", true,
+                state("25.5", TemperatureUnit.CELSIUS), (v, self) -> new CompletableFuture<>());
+        when(stationDevice.getAttrs()).thenReturn(attrs(attr));
+
+        AsmControlSubmission submission = service.executeAsync(
+                AsmControlOrigin.LOCAL, "consumer-x", "logicdevice_station.th",
+                "temperature", "30.0", null, Runnable::run);
+
+        // 提交后先吃满一个完整 timeout：控制任务仍排队，超时预算不得开始消耗
+        clock.advance(TIMEOUT);
+        executor.runAll();
+        assertEquals(AsmControlResult.PENDING, submission.getRecord().getResult());
+        assertEquals(1, timeoutScheduler.tasks.size());
+
+        // 拾起时才建 start 和超时任务；再推进一个完整 timeout 才如实定案 TIMEOUT
+        clock.advance(TIMEOUT);
+        timeoutScheduler.fireAll();
+        executor.runAll();
+
+        assertEquals(AsmControlResult.TIMEOUT, submission.getRecord().getResult());
+        assertEquals(Long.valueOf(TIMEOUT.toMillis()), submission.getRecord().getDurationMs());
+        assertTrue(submission.getCompletion().isDone());
+    }
+
+    @Test
+    void executeAsync_completionCallbackRunsAfterAuditUpdate() {
+        AtomicBoolean updated = new AtomicBoolean(false);
+        doAnswer(inv -> {
+            updated.set(true);
+            return 1;
+        }).when(recordMapper).updateResult(any(AsmControlRecord.class));
+        stubInsertWithId(44L);
+        WritableAttr attr = okAttr("temperature", "25.5");
+        when(stationDevice.getAttrs()).thenReturn(attrs(attr));
+
+        AsmControlSubmission submission = service.executeAsync(
+                AsmControlOrigin.LOCAL, "consumer-x", "logicdevice_station.th",
+                "temperature", "30.0", null, Runnable::run);
+        AtomicBoolean callbackSawUpdate = new AtomicBoolean(false);
+        submission.getCompletion().thenAccept(done -> callbackSawUpdate.set(updated.get()));
+        executor.runAll();
+
+        verify(recordMapper).updateResult(any(AsmControlRecord.class));
+        assertTrue(callbackSawUpdate.get(), "completion 回调触发时审计终态必须已落库");
+    }
+
+    @Test
+    void executeAsync_callbackExecutorRejectionCompletesExceptionallyAfterAuditSuccess() {
+        stubInsertWithId(45L);
+        WritableAttr attr = okAttr("temperature", "25.5");
+        when(stationDevice.getAttrs()).thenReturn(attrs(attr));
+        Executor rejectedCallbackExecutor = task -> {
+            throw new RejectedExecutionException("callback pool down");
+        };
+
+        AsmControlSubmission submission = service.executeAsync(
+                AsmControlOrigin.LOCAL, "consumer-x", "logicdevice_station.th",
+                "temperature", "30.0", null, rejectedCallbackExecutor);
+        executor.runAll();
+
+        ExecutionException e = assertThrows(ExecutionException.class,
+                () -> submission.getCompletion().get());
+        assertEquals(IllegalStateException.class, e.getCause().getClass());
+        assertTrue(e.getCause().getMessage().contains("回调 executor 已不可用"));
+        assertEquals(AsmControlResult.SUCCESS, submission.getRecord().getResult());
+        verify(recordMapper).updateResult(any(AsmControlRecord.class));
+    }
+
+    @Test
+    void executeAsync_auditOutcomeEquivalentToExecuteForSameInput() {
+        stubInsertWithId(46L);
+        CompletableFuture<Boolean> oldWrite = new CompletableFuture<>();
+        when(stationDevice.getAttrs()).thenReturn(attrs(new WritableAttr("temperature", true,
+                state("25.5", TemperatureUnit.CELSIUS), (v, self) -> oldWrite)));
+
+        service.execute(AsmControlOrigin.LOCAL, "consumer-x", "logicdevice_station.th",
+                "temperature", "30.0", null);
+        executor.runAll();
+        clock.advance(Duration.ofMillis(300));
+        oldWrite.complete(true);
+
+        CompletableFuture<Boolean> asyncWrite = new CompletableFuture<>();
+        when(stationDevice.getAttrs()).thenReturn(attrs(new WritableAttr("temperature", true,
+                state("25.5", TemperatureUnit.CELSIUS), (v, self) -> asyncWrite)));
+        service.executeAsync(AsmControlOrigin.LOCAL, "consumer-x", "logicdevice_station.th",
+                "temperature", "30.0", null, Runnable::run);
+        executor.runAll();
+        clock.advance(Duration.ofMillis(300));
+        asyncWrite.complete(true);
+
+        ArgumentCaptor<AsmControlRecord> cap = ArgumentCaptor.forClass(AsmControlRecord.class);
+        verify(recordMapper, times(2)).updateResult(cap.capture());
+        AsmControlRecord oldResult = cap.getAllValues().get(0);
+        AsmControlRecord asyncResult = cap.getAllValues().get(1);
+        assertEquals(oldResult.getResult(), asyncResult.getResult());
+        assertEquals(oldResult.getAfterValue(), asyncResult.getAfterValue());
+        assertEquals(oldResult.getError(), asyncResult.getError());
+        assertEquals(Long.valueOf(300L), oldResult.getDurationMs(), "旧路径 duration 起点");
+        assertEquals(Long.valueOf(300L), asyncResult.getDurationMs(), "异步路径 duration 起点");
+    }
+
+    @Test
+    void executeAsync_nullCallbackExecutorRejectedExplicitly() {
+        assertThrows(IllegalArgumentException.class, () -> service.executeAsync(
+                AsmControlOrigin.LOCAL, "consumer-x", "logicdevice_station.th",
+                "temperature", "30.0", null, null));
+        verifyNoInteractions(recordMapper);
     }
 
     // ===== parseFromUnit：SDK/REST 共用解析（null/空白=nullUnit；非空=full string；符号拒绝）=====
