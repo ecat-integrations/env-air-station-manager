@@ -5,7 +5,7 @@
   "author": "ECAT Open Source Community",
   "license": "MIT",
   "scripts": {
-    "gen": "node ../../../../../env-dev-utils/vue-package/build-ruoyi/build.js ./",
+    "gen": "node ../../../../target/frontend-tools/vue-package/build-ruoyi/build.js ./",
     "dev": "npm run gen && webpack --config webpack.config.js --mode=development",
     "release": "npm run gen && webpack --config webpack.config.js --mode=production"
   },
