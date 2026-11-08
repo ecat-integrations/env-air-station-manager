@@ -4,6 +4,7 @@ import com.ecat.core.ConfigEntry.ConfigEntry;
 import com.ecat.core.ConfigFlow.ConfigFlowResult;
 import com.ecat.core.ConfigFlow.ConfigFlowService;
 import com.ecat.core.Device.DeviceBase;
+import com.ecat.core.Device.DeviceClasses;
 import com.ecat.core.EcatCore;
 import com.ecat.integration.EnvAirStationManagerIntegration.driver.FlowContext;
 import com.ecat.integration.EnvAirStationManagerIntegration.driver.FlowDriver;
@@ -112,7 +113,15 @@ public class StationDeviceBindingService {
                     ? phyDevice.getEntry().getCoordinate() : null;
             String title = phyDevice != null && phyDevice.getEntry() != null
                     ? phyDevice.getEntry().getTitle() : null;
-            result.add(new ParamBinding(param, state, boundDeviceId, coordinate, title));
+            // 型号/厂商/设备类型经 DeviceBase getter（与 ADM 绑定列表同源）。
+            // 未声明 class 时 DeviceBase 会落到 DEFAULT_SENSOR，那种占位不作为「设备类型」下发。
+            String deviceModel = phyDevice == null ? null : phyDevice.getModel();
+            String deviceVendor = phyDevice == null ? null : phyDevice.getVendor();
+            DeviceClasses deviceClassEnum = phyDevice == null ? null : phyDevice.getDeviceClass();
+            String deviceClass = deviceClassEnum == null || deviceClassEnum == DeviceClasses.DEFAULT_SENSOR
+                    ? null : deviceClassEnum.getClassName();
+            result.add(new ParamBinding(param, state, boundDeviceId, coordinate, title,
+                    deviceModel, deviceVendor, deviceClass));
         }
         return result;
     }
@@ -593,7 +602,11 @@ public class StationDeviceBindingService {
 
     // ==================== DTO ====================
 
-    /** 类型槽绑定状态（sidebar 三态用）。 */
+    /**
+     * 类型槽绑定状态（sidebar 三态用）。
+     * 稳定识别字段 coordinate / title / deviceModel / deviceVendor / deviceClass
+     * 仅 CONFIGURED 时有值；连接全貌仍走右侧 detail 原样 dump。
+     */
     public static final class ParamBinding {
         public final StationParamMeta param;
         public final DeviceState state;
@@ -601,15 +614,28 @@ public class StationDeviceBindingService {
         public final String boundDeviceId;
         public final String coordinate;
         public final String title;
+        /** 物理设备型号（{@code DeviceBase.getModel()}），仅 CONFIGURED 时有值。 */
+        public final String deviceModel;
+        /** 物理设备厂商（{@code DeviceBase.getVendor()}），仅 CONFIGURED 时有值。 */
+        public final String deviceVendor;
+        /**
+         * 物理设备类型（{@code DeviceClasses.getClassName()}，如 {@code air.monitor.qc}）。
+         * 未声明 class（运行时落成 DEFAULT_SENSOR）时为 null。展示名由前端映射。
+         */
+        public final String deviceClass;
 
         public ParamBinding(StationParamMeta param, DeviceState state, String boundDeviceId,
-                            String coordinate, String title) {
+                            String coordinate, String title,
+                            String deviceModel, String deviceVendor, String deviceClass) {
             this.param = param;
             this.state = state;
             this.configured = (state == DeviceState.CONFIGURED);
             this.boundDeviceId = boundDeviceId;
             this.coordinate = coordinate;
             this.title = title;
+            this.deviceModel = deviceModel;
+            this.deviceVendor = deviceVendor;
+            this.deviceClass = deviceClass;
         }
     }
 

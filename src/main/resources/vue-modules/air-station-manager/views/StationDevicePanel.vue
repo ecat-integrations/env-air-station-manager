@@ -11,7 +11,6 @@
     />
     <header class="panel-header">
       <h1 class="panel-title">站房设备配置</h1>
-      <p class="panel-sub">为 22 类站房设备（37 个类型槽）各配置物理设备并绑定到 logic station device。多实例类型（空调/标气/滤膜/摄像头等）逐槽独立配置。</p>
     </header>
 
     <p v-if="loadError" class="panel-err">加载失败:{{ loadError }}</p>
@@ -204,14 +203,31 @@ waitAsmReady().then(() => { booting.value = false; refresh() })
 </script>
 
 <style scoped>
-.station-device-panel { padding: 16px; min-width: 1200px; }
-.asm-boot-banner { margin-bottom: 12px; }
-.panel-header { margin-bottom: 16px; }
-.panel-title { font-size: 20px; font-weight: 700; margin: 0 0 4px 0; }
-.panel-sub { color: #6b7280; font-size: 13px; margin: 0; }
-.panel-err { color: #dc2626; }
+/* 高度吃满主区，左右两列齐高。min-width:0：窄窗时按钮区折行，不被右边框裁掉。 */
+.station-device-panel {
+  padding: 16px;
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
+  height: calc(100vh - 140px);
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--el-bg-color-page, #f5f7fa);
+}
+.asm-boot-banner { margin-bottom: 12px; flex: 0 0 auto; }
+.panel-header { margin-bottom: 12px; flex: 0 0 auto; }
+.panel-title { font-size: 16px; font-weight: 650; margin: 0; color: #111827; }
+.panel-err { color: #dc2626; flex: 0 0 auto; }
 
-.layout { display: flex; gap: 16px; align-items: flex-start; }
-/* 加载中给 v-loading 遮罩一个可视高度（sidebar/detail 未渲染时容器塌陷） */
+.layout {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  gap: 16px;
+  align-items: stretch;
+}
 .layout.layout-loading { min-height: 240px; }
 </style>
