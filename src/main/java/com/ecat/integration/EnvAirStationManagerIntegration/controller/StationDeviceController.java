@@ -57,6 +57,16 @@ public class StationDeviceController extends BaseController {
         return AjaxResult.success(service.bootReady());
     }
 
+    /**
+     * 连接摘要（GET /asm-monitor/device/comm-briefs）：{@code {deviceId → {deviceId, coordinate, className, commSettings}}}。
+     * 供「连接拓扑」链路节点一次画全站接线（按 deviceId 去重，只含已被类型槽绑定的设备）。
+     */
+    @PreAuthorize("@ss.hasPermi('asm-monitor:device:list')")
+    @GetMapping("/comm-briefs")
+    public AjaxResult commBriefs() {
+        return AjaxResult.success(service.listCommBriefs());
+    }
+
     /** 该类型槽可选厂家型号。 */
     @PreAuthorize("@ss.hasPermi('asm-monitor:device:list')")
     @GetMapping("/params/{type}/vendors")

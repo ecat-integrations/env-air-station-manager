@@ -62,6 +62,12 @@ export function getDeviceDetail(type) {
   return request({ url: `/asm-monitor/device/params/${encodeURIComponent(type)}/device`, method: 'get' })
 }
 
+// 连接摘要（按 deviceId 归并，供「连接拓扑」一次画全站接线）→ { deviceId: {deviceId, coordinate, className, commSettings} }
+// 只含已被类型槽绑定的设备，且只回传判型所需字段（不含整份 entry.data）。
+export function getCommBriefs() {
+  return request({ url: '/asm-monitor/device/comm-briefs', method: 'get' })
+}
+
 // 改连接：对已绑设备启动 RECONFIGURE flow → {flowId, stepId, schema, stepInputs}
 export function reconfigure(type) {
   return request({ url: `/asm-monitor/device/params/${encodeURIComponent(type)}/reconfigure`, method: 'post' })

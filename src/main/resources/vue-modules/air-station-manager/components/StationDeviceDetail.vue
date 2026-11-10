@@ -38,11 +38,8 @@
           <div v-if="referencedBy.length" class="ref-note">
             该物理设备另被 [{{ referencedBy.join('、') }}] 引用
           </div>
-          <div class="dump-block">
-            <div class="dump-label">设备配置内容(原样)</div>
-            <pre v-if="detailData" class="dump">{{ detailData }}</pre>
-            <p v-else class="dump is-loading">加载中…</p>
-          </div>
+          <!-- 配置结果：详细配置（连接分项 + 其他配置）与原始配置互斥展开，原始配置可一键复制 -->
+          <ConfigDisplay :data="detailData" :hint="displayHint" />
         </template>
 
         <p v-else class="detail-hint is-empty">
@@ -67,16 +64,23 @@
 defineOptions({ name: 'StationDeviceDetail' })
 import { computed } from 'vue'
 import { groupOf, labelOf } from '../stationParamMeta'
+import ConfigDisplay from './config-display/ConfigDisplay.vue'
 
 const props = defineProps({
   paramBinding: { type: Object, default: null },
-  detailData: { type: String, default: '' },
+  /** entry.data 对象（null = 加载中）；由 ConfigDisplay 做详细/原始双面板展示 */
+  detailData: { type: Object, default: null },
   referencedBy: { type: Array, default: () => [] },
 })
 defineEmits(['add-device', 'replace', 'reconnect', 'unbind'])
 
 const stateText = computed(() => (props.paramBinding?.configured ? '已配置' : '未配置'))
 const stateClass = computed(() => (props.paramBinding?.configured ? 'configured' : 'unconfigured'))
+/** 辅助识别连接类型（CLink 需要 coordinate；deviceModel 留给后续扩展） */
+const displayHint = computed(() => ({
+  coordinate: props.paramBinding?.coordinate || '',
+  deviceModel: props.paramBinding?.deviceModel || '',
+}))
 </script>
 
 <style scoped>
@@ -132,20 +136,6 @@ const stateClass = computed(() => (props.paramBinding?.configured ? 'configured'
   font-size: 12px; color: #d97706; background: #fffbeb; border: 1px solid #fde68a;
   border-radius: 4px; padding: 6px 10px; margin-bottom: 12px;
 }
-
-.dump-block {
-  flex: 1 1 auto; min-height: 0;
-  display: flex; flex-direction: column;
-}
-.dump-label { flex: 0 0 auto; font-size: 12px; color: #6b7280; margin: 0 0 4px; }
-.dump {
-  flex: 1 1 auto; min-height: 0;
-  background: #f9fafb; border: 1px solid var(--el-border-color-lighter, #ebeef5); border-radius: 6px;
-  padding: 12px;
-  font-size: 12px; overflow: auto; white-space: pre-wrap; word-break: break-all;
-  margin: 0;
-}
-.dump.is-loading { color: #9ca3af; font-family: inherit; }
 
 .detail-hint { color: #9ca3af; font-size: 13px; margin: 8px 0 16px; }
 .detail-hint.is-empty {

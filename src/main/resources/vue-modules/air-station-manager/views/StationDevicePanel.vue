@@ -9,23 +9,40 @@
       show-icon
       title="系统初始化中，设备配置装载中，请稍候…"
     />
-    <header class="panel-header">
-      <h1 class="panel-title">站房设备配置</h1>
-    </header>
-
     <p v-if="loadError" class="panel-err">加载失败:{{ loadError }}</p>
 
-    <!-- 加载态挂 layout 容器（v-loading 指令）：booting/加载中显示 spinner，loaded 后渲染 sidebar+detail -->
-    <div v-else class="layout" :class="{ 'layout-loading': !loaded }" v-loading="!loaded">
-      <!-- 左 sidebar：37 类型槽分组全景 + 绑定徽标 -->
-      <StationDeviceSidebar
-        :groups="groups"
+    <!-- 加载态挂 layout 容器（v-loading 指令）：booting/加载中显示 spinner，loaded 后渲染拓扑+详情 -->
+    <div
+      v-else
+      class="layout"
+      :class="{ 'layout-loading': !loaded }"
+      :style="{ '--topo-w': topoWidth + 'px' }"
+      v-loading="!loaded"
+    >
+      <!-- 左：站房设备（类型槽分组卡）+ 连接拓扑（链路节点 → 设备卡）合为一个面板，
+           槽行右沿就是连线起点，两侧滚动同步、端点永不错位 -->
+      <ConnectionTopology
+        :bindings="paramBindings"
+        :briefs="commBriefs"
         :selectedParam="selected && selected.param"
-        @select="selectParam"
+        :focus="topoFocus"
+        @select="onSelectParam"
+        @toggle-focus="topoFocus = !topoFocus"
       />
+
+      <!-- 拓扑与详情之间的宽度手柄（双击复位） -->
+      <div
+        v-if="!topoFocus"
+        class="split"
+        :class="{ 'is-dragging': resizing }"
+        title="拖动调整拓扑宽度（双击复位）"
+        @mousedown="startResize"
+        @dblclick="resetWidth"
+      ></div>
 
       <!-- 右 detail：绑定详情 + 操作区状态机 -->
       <StationDeviceDetail
+        v-if="!topoFocus"
         :paramBinding="selected"
         :detailData="detailData"
         :referencedBy="referencedBy"
@@ -67,21 +84,81 @@
 // 按"组件 name"匹配，tagsView store 自动塞"路由 name"进 include；不等→不缓存→<transition mode=out-in>
 // 离开 unmount→SPA 导航白屏（memory: vue-script-setup-keepalive-needs-defineoptions-name）。
 defineOptions({ name: 'station_device' })
-import { reactive, ref } from 'vue'
+import { onBeforeUnmount, reactive, ref } from 'vue'
 import { ElMessageBox } from 'element-plus'
 import { useStationDeviceState } from '../composables/useStationDeviceState'
 import { labelOf, typeOf } from '../stationParamMeta'
 import { listCompatibleDevices, bindExisting, unbindType, waitAsmReady } from '../api/device'
-import StationDeviceSidebar from '../components/StationDeviceSidebar.vue'
+import ConnectionTopology from '../components/connection-topology/ConnectionTopology.vue'
 import StationDeviceDetail from '../components/StationDeviceDetail.vue'
 import ReuseDeviceDialog from '../components/ReuseDeviceDialog.vue'
 import ConfigFlowDialog from '../components/ConfigFlowDialog.vue'
 
 const {
-  loaded, loadError, selected, detailData,
-  groups, referencedBy, referencingLabels,
+  paramBindings, loaded, loadError, selected, detailData, commBriefs,
+  referencedBy, referencingLabels,
   refresh, selectParam,
 } = useStationDeviceState()
+
+// 拓扑面板宽度（可拖 560–880，双击复位）；详情自动吃掉剩余宽度。
+const TOPO_MIN = 560
+const TOPO_MAX = 880
+const TOPO_DEFAULT = 640
+const TOPO_KEY = 'asm.topology.panelWidth'
+const topoWidth = ref(TOPO_DEFAULT)
+try {
+  const saved = parseInt(localStorage.getItem(TOPO_KEY) || '', 10)
+  if (saved >= TOPO_MIN && saved <= TOPO_MAX) topoWidth.value = saved
+} catch (_) { /* 隐私模式下 localStorage 可能抛错：忽略，用默认宽度 */ }
+
+// 全屏画布模式：临时隐藏详情，专心看全站接线
+const topoFocus = ref(false)
+const resizing = ref(false)
+/** 拖拽中的清理函数（卸载时兜底回收，避免 window 监听泄漏） */
+let stopResize = null
+
+/** 点设备卡时选中它的首个槽；点槽行直接按槽选中（两条入口最终都落到 selectParam）。 */
+function onSelectParam(param) {
+  const binding = paramBindings.value.find(p => p.param === param)
+  if (binding) selectParam(binding)
+}
+
+function startResize(e) {
+  if (e.button !== 0) return
+  e.preventDefault()
+  resizing.value = true
+  const startX = e.clientX
+  const startW = topoWidth.value
+  document.body.style.cursor = 'col-resize'
+  document.body.style.userSelect = 'none'
+
+  const onMove = (ev) => {
+    const w = startW + (ev.clientX - startX)
+    topoWidth.value = Math.min(TOPO_MAX, Math.max(TOPO_MIN, Math.round(w)))
+  }
+  const onUp = () => {
+    resizing.value = false
+    document.body.style.cursor = ''
+    document.body.style.userSelect = ''
+    window.removeEventListener('mousemove', onMove)
+    window.removeEventListener('mouseup', onUp)
+    stopResize = null
+    try { localStorage.setItem(TOPO_KEY, String(topoWidth.value)) } catch (_) { /* 忽略 */ }
+  }
+  window.addEventListener('mousemove', onMove)
+  window.addEventListener('mouseup', onUp)
+  stopResize = onUp
+}
+
+function resetWidth() {
+  topoWidth.value = TOPO_DEFAULT
+  try { localStorage.setItem(TOPO_KEY, String(TOPO_DEFAULT)) } catch (_) { /* 忽略 */ }
+}
+
+onBeforeUnmount(() => {
+  // 拖拽中卸载（切页）：回收挂在 window 上的监听，避免闭包一直持有已销毁组件的 ref
+  if (stopResize) stopResize()
+})
 
 // ==================== 复用弹窗编排（配置/更换共用） ====================
 const reuseDlg = reactive({
@@ -217,8 +294,6 @@ waitAsmReady().then(() => { booting.value = false; refresh() })
   background: var(--el-bg-color-page, #f5f7fa);
 }
 .asm-boot-banner { margin-bottom: 12px; flex: 0 0 auto; }
-.panel-header { margin-bottom: 12px; flex: 0 0 auto; }
-.panel-title { font-size: 16px; font-weight: 650; margin: 0; color: #111827; }
 .panel-err { color: #dc2626; flex: 0 0 auto; }
 
 .layout {
@@ -226,8 +301,28 @@ waitAsmReady().then(() => { booting.value = false; refresh() })
   min-width: 0;
   min-height: 0;
   display: flex;
-  gap: 16px;
   align-items: stretch;
 }
 .layout.layout-loading { min-height: 240px; }
+
+/* 拓扑与详情之间的宽度手柄（视觉上就是一条 6px 的拖拽带，hover/拖动时显灰） */
+.split {
+  flex: 0 0 6px;
+  align-self: stretch;
+  position: relative;
+  z-index: 5;
+  margin: 0 4px;
+  cursor: col-resize;
+}
+.split::after {
+  content: '';
+  position: absolute;
+  inset: 0 2px;
+  border-radius: 2px;
+  transition: background .12s;
+}
+.split:hover::after,
+.split.is-dragging::after {
+  background: #cbd5e1;
+}
 </style>

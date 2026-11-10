@@ -137,6 +137,83 @@ public class StationDeviceBindingService {
         return DeviceState.NOT_CREATED;
     }
 
+    // ==================== 连接摘要（拓扑链路节点） ====================
+
+    /**
+     * 连接摘要（GET /asm-monitor/device/comm-briefs）：{@code deviceId → CommBrief}，供「连接拓扑」
+     * 一次画全站接线。与 ADM {@code AirDeviceBindingService#listCommBriefs} 同构。
+     *
+     * <p><b>为什么单独一个端点</b>：拓扑要「始终显示所有已绑设备的链路」，若把 {@code comm_settings}
+     * 塞进 {@link ParamBinding}，同一台物理设备被 N 个类型槽绑定时会各带一份（多实例类型尤甚）；
+     * 且「槽绑到哪台设备」与「那台设备的链路属性」是两种生命周期不同的数据。故按 deviceId 去重单独下发。
+     *
+     * <p><b>容量边界</b>：只回传判型所需三字段（coordinate / class / comm_settings），<b>不回传整份
+     * entry.data</b>——寄存器映射表、推送凭据等与「这是哪条链路」无关且体积可观。comm_settings 缺失时
+     * （少数集成把串口字段铺在顶层）回落为「只取标量且长度 ≤ 64 的顶层键」，既保住前端
+     * {@code normalizeComm} 的跨集成交错命名识别能力，又不让大表/长文本泄进来。
+     *
+     * <p><b>范围</b>：只返回「已被站房类型槽绑定」的设备（即 listParamBindings 里出现过的 boundDeviceId），
+     * 天然不越权枚举任意物理设备。
+     *
+     * <p><b>摘要字符串不在 Java 侧生成</b>：各厂商键名交错（numDataBit / baudRate / serialPort…），
+     * 归一化与摘要逻辑在前端（{@code comm/normalizeComm.js} + {@code comm/summary.js}），与详情卡同源同码。
+     */
+    public synchronized Map<String, CommBrief> listCommBriefs() {
+        Map<String, CommBrief> out = new LinkedHashMap<>();
+        for (ParamBinding b : listParamBindings()) {
+            String id = b.boundDeviceId;
+            if (id == null || out.containsKey(id)) {
+                continue;
+            }
+            DeviceBase phy = core.getDeviceRegistry().getDeviceByID(id);
+            if (phy == null || phy.getEntry() == null) {
+                continue;
+            }
+            ConfigEntry entry = phy.getEntry();
+            Map<String, Object> data = entry.getData();
+            out.put(id, new CommBrief(id, entry.getCoordinate(),
+                    data == null ? null : asText(data.get("class")),
+                    extractCommBlock(data)));
+        }
+        return out;
+    }
+
+    /** class 字段可能是字符串或枚举，统一成字符串（前端只用于选设备图形）。 */
+    private static String asText(Object v) {
+        return v == null ? null : String.valueOf(v);
+    }
+
+    /**
+     * 摘出「连接块」：优先 {@code data.comm_settings}；缺失时回落为顶层标量（<b>跳过 Map/List/数组与
+     * 超长文本</b>，防止寄存器映射表、协议枚举说明等大字段随拓扑请求下发）。
+     *
+     * @return 可直接作为 {@code comm_settings} 交给前端 normalizeComm 的 map；无线索时返回 null
+     */
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> extractCommBlock(Map<String, Object> data) {
+        if (data == null) {
+            return null;
+        }
+        Object nested = data.get("comm_settings");
+        if (nested instanceof Map) {
+            return (Map<String, Object>) nested;
+        }
+        Map<String, Object> flat = new LinkedHashMap<>();
+        for (Map.Entry<String, Object> e : data.entrySet()) {
+            Object v = e.getValue();
+            if (v == null || v instanceof Map || v instanceof java.util.Collection
+                    || v instanceof Object[]) {
+                continue;
+            }
+            // 长文本多为协议说明/枚举清单，与连接判型无关
+            if (v instanceof String && ((String) v).length() > 64) {
+                continue;
+            }
+            flat.put(e.getKey(), v);
+        }
+        return flat.isEmpty() ? null : flat;
+    }
+
     // ==================== 阶段1：列厂家型号 ====================
 
     public List<StationProvisionProfileRegistry.VendorOption> listVendors(StationParamMeta param) {
@@ -675,6 +752,29 @@ public class StationDeviceBindingService {
     }
 
     /** 复用兼容设备（全稳定对象 API 来源，不按键义捞 entry.data）。 */
+    /**
+     * 连接摘要（{@code GET /asm-monitor/device/comm-briefs} 的元素）：某物理设备「接线」的最小必要信息。
+     *
+     * <p>前端拿 {@code commSettings} 走 {@code normalizeComm} → {@code resolveConnectionType} →
+     * {@code connectionSummary}，与右侧详情卡展开时的摘要同源同码，不产生第二份实现。
+     */
+    public static final class CommBrief {
+        public final String deviceId;
+        /** 物理设备厂商坐标（如 com.ecat:integration-saimosen）。 */
+        public final String coordinate;
+        /** entry.data.class（如 air.conditioner），缺失时前端按类型槽推断图形。 */
+        public final String className;
+        /** 连接块（原 comm_settings，或顶层标量回落）；null = 该设备无连接线索。 */
+        public final Map<String, Object> commSettings;
+
+        public CommBrief(String deviceId, String coordinate, String className, Map<String, Object> commSettings) {
+            this.deviceId = deviceId;
+            this.coordinate = coordinate;
+            this.className = className;
+            this.commSettings = commSettings;
+        }
+    }
+
     /** 兼容设备事实（deviceId/coordinate/title/uniqueId）——不含引用标注：被哪些槽引用由 params 数据
      *  （boundDeviceId）推导，前端单一推导点 useStationDeviceState.referencingLabels（中文标签同点转换），
      *  后端曾下发 referencingParams 与前端详情页推导构成分叉复制，已收口删除。 */

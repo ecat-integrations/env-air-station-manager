@@ -2,7 +2,7 @@
 // 持有：37 类型槽绑定状态(paramBindings)/选中态/详情 dump/加载态；提供 sidebar 分组计算、引用标注；
 // 动作：刷新、选中槽、拉详情。弹窗编排由 StationDevicePanel 与各对话框分管。
 import { ref, computed } from 'vue'
-import { listParamBindings, getDeviceDetail } from '../api/device'
+import { listParamBindings, getDeviceDetail, getCommBriefs } from '../api/device'
 import { GROUP_ORDER, groupOf, labelOf, typeOf } from '../stationParamMeta'
 
 export function useStationDeviceState() {
@@ -10,7 +10,10 @@ export function useStationDeviceState() {
   const loaded = ref(false)
   const loadError = ref('')
   const selected = ref(null)   // 当前选中 ParamBinding
-  const detailData = ref('')   // 选中槽绑定设备的 entry.data 原样 JSON
+  const detailData = ref(null) // 选中槽绑定设备的 entry.data 对象（ConfigDisplay 友好展示）
+  // 连接摘要 { deviceId → {coordinate, className, commSettings} }：null = 尚未加载（拓扑链路节点显骨架）。
+  // 与 detailData 分开：前者是全站「每台设备接哪个口」，后者只描述当前选中那一台。
+  const commBriefs = ref(null)
 
   // sidebar 分组：按 GROUP_ORDER 聚合，组内按后端返回顺序（StationParamMeta 枚举序）。
   const groups = computed(() => {
@@ -40,7 +43,12 @@ export function useStationDeviceState() {
 
   async function refresh() {
     try {
-      const res = await listParamBindings()
+      // 绑定列表与连接摘要并发：拓扑要「始终显示所有已绑设备的链路」，
+      // 但两者缓存失效时机不同（摘要随设备改连接变，绑定随槽增删变），故分开取、并行跑。
+      const [res] = await Promise.all([
+        listParamBindings(),
+        loadCommBriefs(),
+      ])
       paramBindings.value = res.data || []
       loaded.value = true
       // 保留选中态：刷新后用同 param 的最新行替换
@@ -49,7 +57,7 @@ export function useStationDeviceState() {
         if (cur) {
           selected.value = cur
           if (cur.configured) loadDetail(cur)
-          else detailData.value = ''
+          else detailData.value = null
         }
       }
     } catch (e) {
@@ -59,22 +67,38 @@ export function useStationDeviceState() {
 
   async function selectParam(p) {
     selected.value = p
-    detailData.value = ''
+    detailData.value = null
     if (p.configured) loadDetail(p)
   }
 
   async function loadDetail(p) {
     try {
       const res = await getDeviceDetail(typeOf(p.param))
-      detailData.value = JSON.stringify(res.data || {}, null, 2)
+      // 保留 entry.data 对象：详细配置要按连接类型拆分 KV，原始配置再在展示层 stringify
+      detailData.value = res.data || {}
     } catch (e) {
-      detailData.value = ''
+      detailData.value = null
+    }
+  }
+
+  /**
+   * 拉连接摘要（/asm-monitor/device/comm-briefs）。失败不阻断主流程：
+   * 拓扑的链路节点降级为「—」，槽 / 设备列照常显示（用户仍能看绑定关系并操作）。
+   */
+  async function loadCommBriefs() {
+    try {
+      const res = await getCommBriefs()
+      commBriefs.value = res.data || {}
+    } catch (e) {
+      // 保持 null → 拓扑链路节点显骨架，而不是误显示「未知连接」
+      commBriefs.value = null
+      console.error('[asm] 加载连接摘要失败', e)
     }
   }
 
   return {
-    paramBindings, loaded, loadError, selected, detailData,
+    paramBindings, loaded, loadError, selected, detailData, commBriefs,
     groups, referencedBy, referencingLabels,
-    refresh, selectParam, loadDetail,
+    refresh, selectParam, loadDetail, loadCommBriefs,
   }
 }

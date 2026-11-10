@@ -16,31 +16,31 @@
           "alwaysShow": true,
           "meta": {
             "title": "空气站房管理",
-            "icon": "redis-list",
+            "icon": "airstation",
             "noCache": false,
             "link": null
           },
           "children": [
-            {
-              "name": "monitor",
-              "path": "monitor",
-              "hidden": false,
-              "component": "views/AsmMonitorHome",
-              "meta": {
-                "title": "站房设备总览",
-                "icon": "monitor",
-                "noCache": false,
-                "link": null
-              }
-            },
             {
               "name": "station_device",
               "path": "station_device",
               "hidden": false,
               "component": "views/StationDevicePanel",
               "meta": {
-                "title": "设备配置",
+                "title": "测点设备配置",
                 "icon": "tree",
+                "noCache": false,
+                "link": null
+              }
+            },
+            {
+              "name": "monitor",
+              "path": "monitor",
+              "hidden": false,
+              "component": "views/AsmMonitorHome",
+              "meta": {
+                "title": "监控首页",
+                "icon": "monitor",
                 "noCache": false,
                 "link": null
               }
