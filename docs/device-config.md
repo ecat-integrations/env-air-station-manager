@@ -22,7 +22,7 @@
 
 | 类型 | 厂商×型号 |
 |---|---|
-| TH | aogan/AGH3485；saimosen/SMS8910(V2) |
+| TH | aogan/AGH3485；saimosen/SMS8910(V2)；rkonfly/MS111 |
 | POWER_METER | chko/DTS8666；saimosen/SMS8910(V2) |
 | VOLTAGE_REGULATOR | saimosen/IRP0501B、SMS8910V2 |
 | UPS | santak/EDX；zhengxin/HCUPS；saimosen/SMS8910(V2) |
@@ -32,12 +32,12 @@
 | SAMPLING_TUBE | saimosen/SMS8910(V2)、SampleTube |
 | STANDARD_GAS(so2/co/nox) | thermofisher/146i；saimosen/SMS8600V2、SMS8910(V2) |
 | FILTER_CHANGER(so2/co/o3/nox) | cecep/TRAMC500；saimosen/SMS8910(V2) |
-| CALIBRATOR | thermofisher/146i；teledyne-api/T700；tianhong/TH2008K/T；tjtongyangkeji/TY-AQMS-45；sailhero/XHCAL2000BV3；saimosen/SMS8600V1/V2 |
+| CALIBRATOR | thermofisher/146i；teledyne-api/T700；tianhong/TH2008K/T；tjtongyangkeji/TY-AQMS-45；sailhero/XHCAL2000BV3/V2；saimosen/SMS8600V1/V2 |
 | ELECTRONIC_FENCE | （仅 stub，不注册） |
 | ACCESS_CONTROL | hikvision/DS-K1T670M；zkteco/TDB08 |
 | CAMERA(1..4) | benmai/MBELBH16P |
 | CLEANLINESS | saimosen/SMS8910(V2)（stub 不注册） |
-| INDOOR_POLLUTANT | rkonfly/CompositeAirQualityDetector；saimosen/SMS8910(V2) |
+| INDOOR_POLLUTANT | rkonfly/MS111；saimosen/SMS8910(V2) |
 | PM_ZERO_CHECK(pm10/pm25) | saimosen/SMS8910(V2) |
 | CUTTER_CHANGER(pm10/pm25) | qdrgdz/QGQGHZZ |
 | PAPER_TAPE(pm10/pm25) | sailhero/XHPM3000EV3、XHPM2000EV2 |

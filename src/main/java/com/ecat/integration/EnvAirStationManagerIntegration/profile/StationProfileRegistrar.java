@@ -32,11 +32,13 @@ public final class StationProfileRegistrar {
     /** 全矩阵注册（幂等：重复 register 同键覆盖）。 */
     public void registerAll() {
         String saimosen = "com.ecat:integration-saimosen";
+        String rkonfly = "com.ecat:integration-rkonfly";
 
-        // TH：aogan AGH3485 / saimosen SMS8910(V1/V2)
+        // TH：aogan AGH3485 / saimosen SMS8910(V1/V2) / rkonfly MS111
         user(StationParamMeta.TH, "com.ecat:integration-aogan", "AGH3485");
         user(StationParamMeta.TH, saimosen, "SMS8910");
         user(StationParamMeta.TH, saimosen, "SMS8910V2");
+        user(StationParamMeta.TH, rkonfly, "MS111");
         // 电力监测仪表：chko DTS8666 / saimosen QC
         user(StationParamMeta.POWER_METER, "com.ecat:integration-chko", "DTS8666");
         user(StationParamMeta.POWER_METER, saimosen, "SMS8910");
@@ -89,13 +91,14 @@ public final class StationProfileRegistrar {
             user(p, saimosen, "SMS8910");
             user(p, saimosen, "SMS8910V2");
         }
-        // 动态校准仪：7 型号
+        // 动态校准仪：9 型号
         user(StationParamMeta.CALIBRATOR, "com.ecat:integration-thermofisher", "146i");
         user(StationParamMeta.CALIBRATOR, "com.ecat:integration-teledyne-api", "T700");
         user(StationParamMeta.CALIBRATOR, "com.ecat:integration-tianhong", "TH2008K");
         user(StationParamMeta.CALIBRATOR, "com.ecat:integration-tianhong", "TH2008T");
         user(StationParamMeta.CALIBRATOR, "com.ecat:integration-tjtongyangkeji", "TY-AQMS-45");
         user(StationParamMeta.CALIBRATOR, "com.ecat:integration-sailhero", "XHCAL2000BV3");
+        user(StationParamMeta.CALIBRATOR, "com.ecat:integration-sailhero", "XHCAL2000BV2");
         user(StationParamMeta.CALIBRATOR, saimosen, "SMS8600V1");
         user(StationParamMeta.CALIBRATOR, saimosen, "SMS8600V2");
         // 门禁：hikvision DS-K1T670M / zkteco TDB08M
@@ -110,7 +113,7 @@ public final class StationProfileRegistrar {
         user(StationParamMeta.CLEANLINESS, saimosen, "SMS8910");
         user(StationParamMeta.CLEANLINESS, saimosen, "SMS8910V2");
         // 室内污染物：rkonfly / saimosen QC
-        user(StationParamMeta.INDOOR_POLLUTANT, "com.ecat:integration-rkonfly", "CompositeAirQualityDetector");
+        user(StationParamMeta.INDOOR_POLLUTANT, rkonfly, "MS111");
         user(StationParamMeta.INDOOR_POLLUTANT, saimosen, "SMS8910");
         user(StationParamMeta.INDOOR_POLLUTANT, saimosen, "SMS8910V2");
         // PM 零点检查：saimosen QC
