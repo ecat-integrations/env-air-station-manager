@@ -1,9 +1,12 @@
 const path = require("path");
-const getCommonWebpackConfig = require("../../../../../env-dev-utils/vue-package/webpack.config.js");
+// 公共 webpack 配置由 Maven 在 generate-resources 阶段从 env-frontend-buildtools 工件
+// 解包到仓内 target/frontend-tools（见根 pom frontend-build profile），单仓克隆即可构建，
+// 不再跨仓引用并排检出的 env-dev-utils 工作区
+const getCommonWebpackConfig = require("../../../../target/frontend-tools/vue-package/webpack.config.js");
 const { VueLoaderPlugin } = require("vue-loader");
 
-// ASM vue 打包：骨架（entry/output/UMD/externals）全部由 env-dev-utils 基座产出，
-// 本文件只补本集成局部规则：.vue loader（comments:false 白屏底线）+ babel + css。
+// ASM vue 打包：骨架（entry/output/UMD/externals）全部由共享基座产出（即上方解包的
+// vue-package），本文件只补本集成局部规则：.vue loader（comments:false 白屏底线）+ babel + css。
 const customConfig = {
   plugins: [
     new VueLoaderPlugin(),
@@ -38,7 +41,7 @@ const customConfig = {
             isCustomElement: (tag) =>
               tag === "flow-form" || tag === "table-field-renderer",
             // 模板根注释 → Fragment → 宿主 transition mode=out-in 间歇白屏（ADM bug-record-20260807-184548
-            // 教训，env-dev-utils applyBaseline 也会兜底，此处显式声明保可读）。
+            // 教训，共享基座 applyBaseline 也会兜底，此处显式声明保可读）。
             comments: false,
           },
         },
